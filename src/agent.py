@@ -58,8 +58,9 @@ class Agent(nn.Module):
                 rng.choice(self.single_action_space.n, batch_size), dtype=torch.long, device=cont_mask.device)
         else:
             a = torch.as_tensor(
-                rng.uniform(self.single_action_space.low, self.single_action_space.high, (self.single_action_space.shape[0], batch_size)),
+                rng.uniform(self.single_action_space.low, self.single_action_space.high, (batch_size, *self.single_action_space.shape)),
                 dtype=torch.float32, device=cont_mask.device)
+            a = a.view(batch_size, *self.single_action_space.shape)
         next_state, stacked_a = self._advance_state(state, cont_mask, a)
         return a, stacked_a, next_state
 
