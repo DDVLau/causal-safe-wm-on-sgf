@@ -22,8 +22,8 @@ class WorldModel(nn.Module):
         if not (isinstance(observation_space, gym.spaces.Box) and len(observation_space.shape) == 4):
             raise ValueError('Observation space is not supported')
 
-        if not isinstance(stacked_action_space, gym.spaces.MultiDiscrete):
-            raise ValueError('Action space is not supported')
+        # if not isinstance(stacked_action_space, gym.spaces.MultiDiscrete):
+        #     raise ValueError('Action space is not supported')
 
         self.observation_space = observation_space
         self.stacked_action_space = stacked_action_space

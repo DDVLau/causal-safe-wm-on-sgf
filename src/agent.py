@@ -53,13 +53,18 @@ class Agent(nn.Module):
 
     def act_randomly(self, state, cont_mask, rng):
         batch_size = cont_mask.shape[0]
-        a = torch.as_tensor(
-            rng.choice(self.single_action_space.n, batch_size), dtype=torch.long, device=cont_mask.device)
+        if hasattr(self.single_action_space, 'n'):
+            a = torch.as_tensor(
+                rng.choice(self.single_action_space.n, batch_size), dtype=torch.long, device=cont_mask.device)
+        else:
+            a = torch.as_tensor(
+                rng.uniform(self.single_action_space.low, self.single_action_space.high, (self.single_action_space.shape[0], batch_size)),
+                dtype=torch.float32, device=cont_mask.device)
         next_state, stacked_a = self._advance_state(state, cont_mask, a)
         return a, stacked_a, next_state
 
     def act(self, state, cont_mask, x, temperature=1):
-        a = self.policy(x, temperature=temperature)
+        a = self.policy(x)
         next_state, stacked_a = self._advance_state(state, cont_mask, a)
         return a, stacked_a, next_state
 
@@ -88,7 +93,7 @@ class AgentTrainer:
         self.autocast = autocast
 
         if eval_mode in ('all', 'final'):
-            eval_env_id, eval_env_wrappers, eval_env_kwargs = envs.atari(game, make=False, **eval_env)
+            eval_env_id, eval_env_wrappers, eval_env_kwargs = envs.make_env(game, make=False, env_config=eval_env)
             self.eval_collector = utils.EpisodeCollector(eval_env_id, eval_env_wrappers, eval_env_kwargs, eval_num_parallel)
 
         self.policy_trainer = agent.policy.create_trainer(policy_trainer, total_its=total_its, rng=rng, autocast=autocast, compile_=compile_)

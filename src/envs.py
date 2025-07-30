@@ -1,10 +1,80 @@
 from functools import partial
 
 import gymnasium as gym
+import numpy as np
 
 
-def atari(game, make, sticky, full_action_space, max_frames, noop_max, resolution, grayscale, frame_skip, frame_stack, episodic_life):
-    """ Create an Atari environment. """
+def make_env(env_name, make, env_config):
+    suite, game = env_name.split(':', 1)
+    if suite == 'dm_control':
+        env = dmc(game=game, make=make, **env_config)
+    elif suite == 'atari':
+        env = atari(game=game, make=make, **env_config)
+    elif suite == 'safety_gym':
+        raise NotImplementedError('Safety Gym environments are not supported yet.')
+    else:
+        raise ValueError(f'Unsupported: {suite}')
+    return env
+
+
+def safety_gymnasium(game, make, size):
+    import safety_gymnasium as safetygym
+
+    version = 'v0'
+    env_id = f'{game}-{version}'
+    wrappers = []
+
+    kwargs = dict(render_mode="rgb_array", camera_name="vision", width=size[0], height=size[1])
+    if make:
+        env = safetygym.make(env_id, **kwargs)
+        for wrapper in wrappers:
+            env = wrapper(env)
+        return env
+    else:
+        return env_id, wrappers, kwargs
+
+
+def dmc(game, make, camera_id, width, height, frame_stack, action_repeat):
+    import shimmy
+
+    gym.register_envs(shimmy)
+
+    domain, task = game.split("_", 1)
+    version = 'v0'
+    env_id = f"dm_control/{domain}-{task}-{version}"
+    if camera_id is None:
+        camera_id = dict(quadruped=2).get(domain, 0)
+    render_kwargs = dict(camera_id=camera_id, width=width, height=height)
+
+    wrappers = [
+        partial(DMCWrapper, action_repeat=action_repeat),
+        partial(gym.wrappers.FrameStackObservation, stack_size=frame_stack),
+    ]
+    kwargs = dict(render_mode="rgb_array", render_kwargs=render_kwargs)
+
+    if make:
+        env = gym.make(env_id, render_mode="rgb_array", render_kwargs=render_kwargs)
+        for wrapper in wrappers:
+            env = wrapper(env)
+        return env
+    else:
+        return env_id, wrappers, kwargs
+
+
+def atari(
+    game,
+    make,
+    sticky,
+    full_action_space,
+    max_frames,
+    noop_max,
+    resolution,
+    grayscale,
+    frame_skip,
+    frame_stack,
+    episodic_life,
+):
+    """Create an Atari environment."""
     if max_frames > 108000:
         raise NotImplementedError('NoFrameskip-v4 environments do not support max_frames > 108000')
 
@@ -12,8 +82,15 @@ def atari(game, make, sticky, full_action_space, max_frames, noop_max, resolutio
     env_id = f'ale_py:{game}NoFrameskip-{version}'
     wrappers = [
         partial(gym.wrappers.TimeLimit, max_episode_steps=max_frames),
-        partial(gym.wrappers.AtariPreprocessing, noop_max=noop_max, frame_skip=frame_skip, screen_size=resolution,
-                terminal_on_life_loss=False, grayscale_obs=grayscale, grayscale_newaxis=True),
+        partial(
+            gym.wrappers.AtariPreprocessing,
+            noop_max=noop_max,
+            frame_skip=frame_skip,
+            screen_size=resolution,
+            terminal_on_life_loss=False,
+            grayscale_obs=grayscale,
+            grayscale_newaxis=True,
+        ),
         partial(gym.wrappers.FrameStackObservation, stack_size=frame_stack),
     ]
 
@@ -36,6 +113,40 @@ def atari(game, make, sticky, full_action_space, max_frames, noop_max, resolutio
         return env
     else:
         return env_id, wrappers, kwargs
+
+
+# region DMC wrappers
+
+
+class DMCWrapper(gym.Wrapper):
+    def __init__(self, env, action_repeat=1):
+        super().__init__(env)
+        self._action_repeat = action_repeat
+        width = self.env.spec.kwargs.get('render_kwargs').get('width')
+        height = self.env.spec.kwargs.get('render_kwargs').get('height')
+        self.observation_space = gym.spaces.Box(0, 255, (height, width, 3), dtype=np.uint8)
+
+    def reset(self, **kwargs):
+        _, info = self.env.reset(**kwargs)
+        o = self.env.render()
+        return o, info
+
+    def step(self, action):
+        reward = 0
+        for _ in range(self._action_repeat):
+            _, next_r, next_term, next_trunc, info = self.env.step(action)
+            reward += next_r
+            if next_term or next_trunc:
+                break
+
+        next_o = self.env.render()
+        return next_o, reward, next_term, next_trunc, info
+
+
+# endregion
+
+
+# region Atari wrappers
 
 
 class EpisodicLifeWrapper(gym.Wrapper):
@@ -157,3 +268,18 @@ class FireLifeWrapper(gym.Wrapper):
                 self.reset_reward += next_r_
         self.lives = lives
         return next_o, next_r, next_term, next_trunc, info
+
+
+# endregion
+
+
+if __name__ == "__main__":
+    from shimmy.registration import DM_CONTROL_SUITE_ENVS
+
+    env_ids = [f"dm_control/{'-'.join(item)}-v0" for item in DM_CONTROL_SUITE_ENVS]
+    # Example usage
+    env = dmc("acrobot_swingup", make=True, camera_id=None, width=64, height=64, action_repeat=2)
+    env.reset(seed=42)
+    print(env.render())
+    print(env.observation_space())
+    env.close()

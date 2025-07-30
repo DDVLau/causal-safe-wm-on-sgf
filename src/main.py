@@ -52,10 +52,10 @@ def main():
     # Initialize the environment, policy, agent, and world model
     seed = (config.seed + 17) * 13
     rng = utils.seed_everything(seed)
-    env = envs.atari(config.game, make=True, **config.env)
+    env = envs.make_env(config.game, make=True, env_config=config.env)
 
     y_dim = config.wm['y_dim']
-    a_dim = env.action_space.n
+    a_dim = env.action_space.n if hasattr(env.action_space, 'n') else env.action_space.shape[0]
     policy = ActorCriticPolicy(y_dim, a_dim, config.policy['actor'], config.policy['critic'],
                                compile_=compile_, device=device)
     agent = Agent(policy, env.action_space, config.action_stack)

@@ -1,12 +1,14 @@
 import torch
 from torch import nn
+from torch.nn import functional as F
+from torch import distributions as torchd
 
 import nets
 import utils
 
 
 class ActorCriticPolicy(nn.Module):
-    """ Actor-Critic policy for discrete action spaces. """
+    """Actor-Critic policy for discrete action spaces."""
 
     def __init__(self, x_dim, a_dim, actor, critic, *, compile_, device=None):
         super().__init__()
@@ -14,75 +16,163 @@ class ActorCriticPolicy(nn.Module):
         self.critic = compile_(nets.ScalarMLP(x_dim, **critic, device=device))
 
     @torch.no_grad()
-    def forward(self, x, temperature=1):
+    def forward(self, x):
         assert not self.actor.training
-        a = self.actor(x, temperature=temperature)
+        a = self.actor(x)
         return a
-    
+
     def create_trainer(self, config, *, total_its, rng, autocast, compile_):
-        return ActorCriticTrainer(self, **config, total_its=total_its,
-                                  rng=rng, autocast=autocast, compile_=compile_)
+        return ActorCriticTrainer(self, **config, total_its=total_its, rng=rng, autocast=autocast, compile_=compile_)
 
 
 class Actor(nn.Module):
-    """ Actor for discrete action spaces. """
+    """Actor for discrete action spaces."""
 
-    def __init__(self, x_dim, a_dim, dims, norm, act, init, out_init, device=None):
+    def __init__(
+        self,
+        x_dim,
+        a_dim,
+        dims,
+        norm,
+        act,
+        init,
+        out_init,
+        dist="normal",
+        std=1.0,
+        min_std=0.1,
+        max_std=10.0,
+        absmax=None,
+        temp=0.1,
+        unimix_ratio=0.01,
+        symlog_inputs=False,
+        device=None,
+    ):
         super().__init__()
+        self._dist = dist
+        self._std = std if isinstance(std, str) else torch.tensor((std,), device=device)
+        self._min_std = min_std
+        self._max_std = max_std
+        self._absmax = absmax
+        self._temp = temp
+        self._unimix_ratio = unimix_ratio
+        self._symlog_inputs = symlog_inputs
+
         modules, backbone_dim = nets.mlp(x_dim, dims, norm, act, init, out_bias=True, out_norm=True, device=device)
-        head = nn.Linear(backbone_dim, a_dim, bias=True, device=device)
-        modules.append(nets.init_(head, out_init))
-        self.mlp = nn.Sequential(*modules)
+        self.layers = nn.Sequential(*modules)
 
-    def get_stats(self, inp, temperature=1, full_precision=False):
-        logits = self.mlp(inp)
+        self.mean_layer = nets.init_(nn.Linear(backbone_dim, a_dim), out_init)
+        if self._std == "learned":
+            assert dist in ("tanh_normal", "normal", "trunc_normal", "huber"), dist
+            self.std_layer = nets.init_(nn.Linear(backbone_dim, a_dim), out_init)
+
+    def get_stats(self, inp, full_precision=False):
+        x = inp
+        if self._symlog_inputs:
+            x = utils.symlog(x)
+        x = self.layers(x)
+        mean = self.mean_layer(x)
+        std = self.std_layer(x) if self._std == "learned" else self._std
+
         if full_precision:
-            logits = logits.type(torch.float32)
-        if temperature != 1:
-            logits = logits / temperature
-        log_probs = torch.log_softmax(logits, -1)  # normalize logits
-        probs = torch.exp(log_probs)
-        return log_probs, probs
+            mean = mean.type(torch.float32)
+            std = std.type(torch.float32)
+
+        dist = self.dist(self._dist, mean, std, mean.shape)
+        return dist
 
     @torch.no_grad()
-    def predict(self, stats):
-        _, probs = stats
-        sample = utils.sample_categorical(probs)
-        return sample
+    def predict(self, dist):
+        return dist.sample()
 
     @torch.no_grad()
-    def forward(self, x, temperature=1):
-        stats = self.get_stats(x, temperature=temperature)
-        sample = self.predict(stats)
+    def forward(self, x):
+        dist = self.get_stats(x)
+        sample = self.predict(dist)
         return sample
 
     def reinforce_loss(self, stats, a, adv, mask):
         assert self.training
-        log_probs, _ = stats
+        log_probs = stats.log_prob(a)
 
         dtype = log_probs.dtype
         adv, mask = adv.type(dtype), mask.type(dtype)
-
-        log_like = log_probs.gather(-1, a.unsqueeze(-1)).squeeze(-1)
-        reinforce_loss = mask.mean(-(adv * log_like))
+        
+        reinforce_loss = mask.mean(-(adv * log_probs))
         return reinforce_loss
 
-    def entropy_loss(self, stats, mask):
+    def entropy_loss(self, stats, a, mask):
         assert self.training
-        log_probs, probs = stats
-        log_probs = log_probs.clone()
-        log_probs[probs == 0] = 0
-        neg_entropy = (probs * log_probs).sum(-1)
-        loss = mask.type(probs.dtype).mean(neg_entropy)
+        log_probs = stats.log_prob(a)
+        neg_entropy = log_probs.exp() * log_probs
+        loss = (mask.type(neg_entropy.dtype)).mean(neg_entropy)
         return loss
+
+    def dist(self, dist, mean, std, shape):
+        if dist == "tanh_normal":
+            mean = torch.tanh(mean)
+            std = F.softplus(std) + self._min_std
+            dist = torchd.normal.Normal(mean, std)
+            dist = torchd.transformed_distribution.TransformedDistribution(dist, utils.TanhBijector())
+            dist = torchd.independent.Independent(dist, 1)
+            dist = utils.SampleDist(dist)
+        elif dist == "normal":
+            std = (self._max_std - self._min_std) * torch.sigmoid(std + 2.0) + self._min_std
+            dist = torchd.normal.Normal(torch.tanh(mean), std)
+            dist = utils.ContDist(torchd.independent.Independent(dist, 1), absmax=self._absmax)
+        elif dist == "normal_std_fixed":
+            dist = torchd.normal.Normal(mean, self._std)
+            dist = utils.ContDist(torchd.independent.Independent(dist, 1), absmax=self._absmax)
+        elif dist == "trunc_normal":
+            mean = torch.tanh(mean)
+            std = 2 * torch.sigmoid(std / 2) + self._min_std
+            dist = utils.SafeTruncatedNormal(mean, std, -1, 1)
+            dist = utils.ContDist(torchd.independent.Independent(dist, 1), absmax=self._absmax)
+        elif dist == "onehot":
+            dist = utils.OneHotDist(mean, unimix_ratio=self._unimix_ratio)
+        elif dist == "onehot_gumble":
+            dist = utils.ContDist(torchd.gumbel.Gumbel(mean, 1 / self._temp), absmax=self._absmax)
+        elif dist == "huber":
+            dist = utils.ContDist(
+                torchd.independent.Independent(
+                    utils.UnnormalizedHuber(mean, std, 1.0),
+                    len(shape),
+                    absmax=self._absmax,
+                )
+            )
+        elif dist == "binary":
+            dist = utils.Bernoulli(torchd.independent.Independent(torchd.bernoulli.Bernoulli(logits=mean), len(shape)))
+        elif dist == "symlog_disc":
+            dist = utils.DiscDist(logits=mean, device=self._device)
+        elif dist == "symlog_mse":
+            dist = utils.SymlogDist(mean)
+        else:
+            raise NotImplementedError(dist)
+        return dist
 
 
 class ActorCriticTrainer:
-    """ Trainer for Actor-Critic policies. """
+    """Trainer for Actor-Critic policies."""
 
-    def __init__(self, policy, actor_optimizer, critic_optimizer, reward_act, return_norm,
-                 gamma, lmbda, entropy_coef, target_decay, target_returns, target_coef, target_every,
-                 *, total_its, rng, autocast, compile_):
+    def __init__(
+        self,
+        policy,
+        actor_optimizer,
+        critic_optimizer,
+        reward_act,
+        return_norm,
+        gamma,
+        lmbda,
+        entropy_coef,
+        target_decay,
+        target_returns,
+        target_coef,
+        target_every,
+        *,
+        total_its,
+        rng,
+        autocast,
+        compile_,
+    ):
 
         self.policy = policy
         self.reward_act = nets.activation(reward_act)
@@ -119,7 +209,7 @@ class ActorCriticTrainer:
 
         with self.autocast():
             actor_stats = actor.get_stats(x, full_precision=True)
-            entropy_loss = actor.entropy_loss(actor_stats, seq_mask)
+            entropy_loss = actor.entropy_loss(actor_stats, a, seq_mask)
             reinforce_loss = actor.reinforce_loss(actor_stats, a, adv, seq_mask)
             actor_loss = reinforce_loss + self.entropy_coef * entropy_loss
 
@@ -139,11 +229,13 @@ class ActorCriticTrainer:
             if self.has_target:
                 target_loss = critic.loss(critic_stats, target_v, seq_mask)
                 critic_loss = return_loss + self.target_coef * target_loss
-                metrics.update({
-                    'return_loss': return_loss,
-                    'target_loss': target_loss,
-                    'critic_loss': critic_loss,
-                })
+                metrics.update(
+                    {
+                        'return_loss': return_loss,
+                        'target_loss': target_loss,
+                        'critic_loss': critic_loss,
+                    }
+                )
             else:
                 critic_loss = return_loss
                 metrics['critic_loss'] = critic_loss

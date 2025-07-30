@@ -8,27 +8,28 @@ import numpy as np
 import torch
 import torch._dynamo
 import torch.nn.functional as F
+import torch.distributions as torchd
 
 
 def random_generator(seed):
-    """ Create a random generator with the given seed. """
+    """Create a random generator with the given seed."""
     return np.random.Generator(np.random.PCG64(seed))
 
 
 def seed_everything(seed):
-    """ Seed all random number generators. """
+    """Seed all random number generators."""
     torch.manual_seed(seed)
     np.random.seed(seed)
     return random_generator(seed)
 
 
 def hinge(x, target):
-    """ Hinge loss. """
+    """Hinge loss."""
     return F.relu(target - x)
 
 
 def off_diagonal(x, keepdim=False):
-    """ Get the off-diagonal elements of a square matrix. """
+    """Get the off-diagonal elements of a square matrix."""
     n, m = x.shape
     assert n == m
     out = x.flatten()[:-1].view(n - 1, n + 1)[:, 1:]
@@ -39,7 +40,7 @@ def off_diagonal(x, keepdim=False):
 
 
 def variance_covariance_loss(z, contrastive=False, eps=1e-4):
-    """ VICReg's variance and covariance loss. """
+    """VICReg's variance and covariance loss."""
 
     # https://github.com/facebookresearch/vicreg/blob/main/main_vicreg.py
     # https://arxiv.org/pdf/2206.02574.pdf
@@ -63,7 +64,7 @@ def variance_covariance_loss(z, contrastive=False, eps=1e-4):
 
 
 def lambda_return(next_rs, next_vs, next_gammas, lmbda):
-    """ Compute the lambda return using generalized advantage estimation. """
+    """Compute the lambda return using generalized advantage estimation."""
 
     T = next_rs.shape[0]
     rets = [None for _ in range(T + 1)]
@@ -77,18 +78,18 @@ def lambda_return(next_rs, next_vs, next_gammas, lmbda):
 
 
 def symlog(x):
-    """ Symmetric log transform, from DreamerV3. """
+    """Symmetric log transform, from DreamerV3."""
     return x.sign() * (x.abs() + 1).log()
 
 
 def symexp(x):
-    """ Symmetric exponential transform, from DreamerV3. """
+    """Symmetric exponential transform, from DreamerV3."""
     return x.sign() * (x.abs().exp() - 1)
 
 
 @torch._dynamo.disable()
 def sample_categorical(probs):
-    """ Sample from a categorical distribution. """
+    """Sample from a categorical distribution."""
     shape = probs.shape
     *batch_shape, out_dim = shape
     probs = probs.reshape(-1, out_dim)
@@ -99,19 +100,19 @@ def sample_categorical(probs):
 
 @torch._dynamo.disable()
 def sample_bernoulli(probs):
-    """ Sample from a Bernoulli distribution. """
+    """Sample from a Bernoulli distribution."""
     return torch.bernoulli(probs)
 
 
 def bins(low, high, num, device=None):
-    """ Create bins. """
+    """Create bins."""
     bins = torch.linspace(low, high, num, device=device)
     bins = torch.round(bins, decimals=4)
     return bins
 
 
 def two_hot(tensor, bins):
-    """ Create two-hot encoding. """
+    """Create two-hot encoding."""
     num_bins = len(bins)
     below_mask = bins <= tensor
     below = below_mask.long().sum(-1, keepdim=True) - 1
@@ -123,12 +124,14 @@ def two_hot(tensor, bins):
     total = dist_to_below + dist_to_above
     weight_below = dist_to_above / total
     weight_above = dist_to_below / total
-    return torch.nn.functional.one_hot(below.squeeze(-1), num_bins) * weight_below + \
-        torch.nn.functional.one_hot(above.squeeze(-1), num_bins) * weight_above
+    return (
+        torch.nn.functional.one_hot(below.squeeze(-1), num_bins) * weight_below
+        + torch.nn.functional.one_hot(above.squeeze(-1), num_bins) * weight_above
+    )
 
 
 def grayscale(x, dim, keepdim=False):
-    """ Convert to grayscale using LUMA. """
+    """Convert to grayscale using LUMA."""
     coefs = x.new_tensor([0.2126, 0.7152, 0.0722])
     dim %= x.ndim
     coefs = coefs.reshape(*((1,) * dim + (3,) + (1,) * (x.ndim - dim - 1)))
@@ -136,7 +139,7 @@ def grayscale(x, dim, keepdim=False):
 
 
 def visualize_observations(o):
-    """ Visualize observations for W&B. """
+    """Visualize observations for W&B."""
     n, num_frames, c, h, w = o.shape
 
     if num_frames == 1:
@@ -172,18 +175,19 @@ def visualize_observations(o):
 
 
 def count_params(mod):
-    """ Count the number of parameters in a module. """
+    """Count the number of parameters in a module."""
     return sum(p.numel() for p in mod.parameters() if p.requires_grad)
 
 
 def device(mod):
-    """ Get the device of a module. """
+    """Get the device of a module."""
     return next(mod.parameters()).device
 
 
 @dataclass
 class Mask:
-    """ Utility class for handling masks. """
+    """Utility class for handling masks."""
+
     values: torch.Tensor
     count: torch.Tensor
     complete: bool
@@ -227,14 +231,14 @@ class Mask:
     def select(self, value):
         if self.complete:
             return value
-        select = (self.values == 1)
+        select = self.values == 1
         return map_structure(lambda x: x[select], value)
 
     def apply(self, value):
         if self.complete:
             return value
         if value.dtype in (torch.uint8, torch.int16, torch.int32, torch.int64):
-            values = (self.values == 1)
+            values = self.values == 1
             return map_structure(lambda x: unsqueeze_as(values, x) * x, value)
         return map_structure(lambda x: unsqueeze_as(self.values, x) * x, value)
 
@@ -276,7 +280,7 @@ class Mask:
 
 @torch.no_grad()
 def get_mask(values):
-    """ Get a mask from a tensor. """
+    """Get a mask from a tensor."""
     values = values.detach()
     if values.dtype == torch.bool:
         complete = torch.all(values).item()
@@ -294,7 +298,7 @@ def get_mask(values):
 
 
 def map_structure(fn, value, skip_none=True):
-    """ Map a function over a (possibly nested) structure. """
+    """Map a function over a (possibly nested) structure."""
     if isinstance(value, (tuple, list)):
         return tuple(map_structure(fn, x) for x in value)
     elif isinstance(value, dict):
@@ -306,7 +310,7 @@ def map_structure(fn, value, skip_none=True):
 
 
 def flatten_structure(value, skip_none=False):
-    """ Flatten a (possibly nested) structure into a tuple. """
+    """Flatten a (possibly nested) structure into a tuple."""
     if skip_none and value is None:
         return tuple()
     if isinstance(value, (tuple, list)):
@@ -319,17 +323,17 @@ def flatten_structure(value, skip_none=False):
 
 
 def flatten_seq(value):
-    """ Flatten the time/batch dimensions of all tensors in a structure. """
+    """Flatten the time/batch dimensions of all tensors in a structure."""
     return map_structure(lambda x: x.flatten(0, 1), value)
 
 
 def unflatten_seq(value, shape):
-    """ Unflatten the time/batch dimensions of all tensors in a structure. """
+    """Unflatten the time/batch dimensions of all tensors in a structure."""
     return map_structure(lambda x: x.unflatten(0, shape), value)
 
 
 def apply_seq(fn, *args, unflatten=True, **kwargs):
-    """ Flatten time/batch dimensions, call the function, and unflatten. """
+    """Flatten time/batch dimensions, call the function, and unflatten."""
     # get shape from first value
     all_values = flatten_structure(args, skip_none=True)
     shape = all_values[0].shape[:2]
@@ -345,7 +349,7 @@ def apply_seq(fn, *args, unflatten=True, **kwargs):
 
 
 def unsqueeze_as(tensor, target_tensor):
-    """ Unsqueeze a tensor to match the shape of another tensor. """
+    """Unsqueeze a tensor to match the shape of another tensor."""
     n = tensor.ndim
     if n > target_tensor.ndim or tensor.shape != target_tensor.shape[:n]:
         raise ValueError(tensor.shape, target_tensor.shape)
@@ -353,7 +357,7 @@ def unsqueeze_as(tensor, target_tensor):
 
 
 def target_network(src_net):
-    """ Create a target network. """
+    """Create a target network."""
     tgt_net = copy.deepcopy(src_net)
     for src_param, tgt_param in zip(src_net.parameters(), tgt_net.parameters()):
         tgt_param.data.copy_(src_param.data)
@@ -363,7 +367,7 @@ def target_network(src_net):
 
 @torch.no_grad()
 def ema_update(src_net, tgt_net, decay):
-    """ Update a target network using exponential moving average. """
+    """Update a target network using exponential moving average."""
     # https://github.com/fadel/pytorch_ema/blob/master/torch_ema/ema.py
     if decay == 1:
         return
@@ -379,7 +383,7 @@ def ema_update(src_net, tgt_net, decay):
 
 
 class Aggregator:
-    """ Aggregator for metrics. """
+    """Aggregator for metrics."""
 
     def __init__(self, op, non_numeric='raise', same_keys=True):
         if op not in ('mean', 'max', 'min'):
@@ -448,11 +452,10 @@ class Aggregator:
 
 
 class EpisodeCollector:
-    """ Utility class for collecting episodes. """
+    """Utility class for collecting episodes."""
 
     def __init__(self, env_id, wrappers, kwargs, num_parallel):
-        self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode='async',
-                                       wrappers=wrappers, **kwargs)
+        self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode='async', wrappers=wrappers, **kwargs)
 
     def close(self):
         self.vector_env.close()
@@ -528,7 +531,7 @@ _numpy_to_torch_dtype_dict = {
     np.float32: torch.float32,
     np.float64: torch.float64,
     np.complex64: torch.complex64,
-    np.complex128: torch.complex128
+    np.complex128: torch.complex128,
 }
 
 
@@ -598,3 +601,274 @@ def _zeros_discrete(space, size=tuple(), device=None):
     if isinstance(size, int):
         size = (size,)
     return torch.zeros(size + tuple(space.shape), dtype=torch.int32, device=device)
+
+
+#region Distributions
+
+
+class SampleDist:
+    def __init__(self, dist, samples=100):
+        self._dist = dist
+        self._samples = samples
+
+    @property
+    def name(self):
+        return "SampleDist"
+
+    def __getattr__(self, name):
+        return getattr(self._dist, name)
+
+    def mean(self):
+        samples = self._dist.sample(self._samples)
+        return torch.mean(samples, 0)
+
+    def mode(self):
+        sample = self._dist.sample(self._samples)
+        logprob = self._dist.log_prob(sample)
+        return sample[torch.argmax(logprob)][0]
+
+    def entropy(self):
+        sample = self._dist.sample(self._samples)
+        logprob = self.log_prob(sample)
+        return -torch.mean(logprob, 0)
+
+
+class OneHotDist(torchd.one_hot_categorical.OneHotCategorical):
+    def __init__(self, logits=None, probs=None, unimix_ratio=0.0):
+        if logits is not None and unimix_ratio > 0.0:
+            probs = F.softmax(logits, dim=-1)
+            probs = probs * (1.0 - unimix_ratio) + unimix_ratio / probs.shape[-1]
+            logits = torch.log(probs)
+            super().__init__(logits=logits, probs=None)
+        else:
+            super().__init__(logits=logits, probs=probs)
+
+    def mode(self):
+        _mode = F.one_hot(torch.argmax(super().logits, axis=-1), super().logits.shape[-1])
+        return _mode.detach() + super().logits - super().logits.detach()
+
+    def sample(self, sample_shape=(), seed=None):
+        if seed is not None:
+            raise ValueError("need to check")
+        sample = super().sample(sample_shape).detach()
+        probs = super().probs
+        while len(probs.shape) < len(sample.shape):
+            probs = probs[None]
+        sample += probs - probs.detach()
+        return sample
+
+
+class DiscDist:
+    def __init__(
+        self,
+        logits,
+        low=-20.0,
+        high=20.0,
+        transfwd=symlog,
+        transbwd=symexp,
+        device="cuda",
+    ):
+        self.logits = logits
+        self.probs = torch.softmax(logits, -1)
+        self.buckets = torch.linspace(low, high, steps=255, device=device)
+        self.width = (self.buckets[-1] - self.buckets[0]) / 255
+        self.transfwd = transfwd
+        self.transbwd = transbwd
+
+    def mean(self):
+        _mean = self.probs * self.buckets
+        return self.transbwd(torch.sum(_mean, dim=-1, keepdim=True))
+
+    def mode(self):
+        _mode = self.probs * self.buckets
+        return self.transbwd(torch.sum(_mode, dim=-1, keepdim=True))
+
+    # Inside OneHotCategorical, log_prob is calculated using only max element in targets
+    def log_prob(self, x):
+        x = self.transfwd(x)
+        # x(time, batch, 1)
+        below = torch.sum((self.buckets <= x[..., None]).to(torch.int32), dim=-1) - 1
+        above = len(self.buckets) - torch.sum((self.buckets > x[..., None]).to(torch.int32), dim=-1)
+        # this is implemented using clip at the original repo as the gradients are not backpropagated for the out of limits.
+        below = torch.clip(below, 0, len(self.buckets) - 1)
+        above = torch.clip(above, 0, len(self.buckets) - 1)
+        equal = below == above
+
+        dist_to_below = torch.where(equal, 1, torch.abs(self.buckets[below] - x))
+        dist_to_above = torch.where(equal, 1, torch.abs(self.buckets[above] - x))
+        total = dist_to_below + dist_to_above
+        weight_below = dist_to_above / total
+        weight_above = dist_to_below / total
+        target = (
+            F.one_hot(below, num_classes=len(self.buckets)) * weight_below[..., None]
+            + F.one_hot(above, num_classes=len(self.buckets)) * weight_above[..., None]
+        )
+        log_pred = self.logits - torch.logsumexp(self.logits, -1, keepdim=True)
+        target = target.squeeze(-2)
+
+        return (target * log_pred).sum(-1)
+
+    def log_prob_target(self, target):
+        log_pred = super().logits - torch.logsumexp(super().logits, -1, keepdim=True)
+        return (target * log_pred).sum(-1)
+
+
+class MSEDist:
+    def __init__(self, mode, agg="sum"):
+        self._mode = mode
+        self._agg = agg
+
+    def mode(self):
+        return self._mode
+
+    def mean(self):
+        return self._mode
+
+    def log_prob(self, value):
+        assert self._mode.shape == value.shape, (self._mode.shape, value.shape)
+        distance = (self._mode - value) ** 2
+        if self._agg == "mean":
+            loss = distance.mean(list(range(len(distance.shape)))[2:])
+        elif self._agg == "sum":
+            loss = distance.sum(list(range(len(distance.shape)))[2:])
+        else:
+            raise NotImplementedError(self._agg)
+        return -loss
+
+
+class SymlogDist:
+    def __init__(self, mode, dist="mse", agg="sum", tol=1e-8):
+        self._mode = mode
+        self._dist = dist
+        self._agg = agg
+        self._tol = tol
+
+    def mode(self):
+        return symexp(self._mode)
+
+    def mean(self):
+        return symexp(self._mode)
+
+    def log_prob(self, value):
+        assert self._mode.shape == value.shape
+        if self._dist == "mse":
+            distance = (self._mode - symlog(value)) ** 2.0
+            distance = torch.where(distance < self._tol, 0, distance)
+        elif self._dist == "abs":
+            distance = torch.abs(self._mode - symlog(value))
+            distance = torch.where(distance < self._tol, 0, distance)
+        else:
+            raise NotImplementedError(self._dist)
+        if self._agg == "mean":
+            loss = distance.mean(list(range(len(distance.shape)))[2:])
+        elif self._agg == "sum":
+            loss = distance.sum(list(range(len(distance.shape)))[2:])
+        else:
+            raise NotImplementedError(self._agg)
+        return -loss
+
+
+class ContDist:
+    def __init__(self, dist=None, absmax=None):
+        super().__init__()
+        self._dist = dist
+        self.mean = dist.mean
+        self.absmax = absmax
+
+    def __getattr__(self, name):
+        return getattr(self._dist, name)
+
+    def entropy(self):
+        return self._dist.entropy()
+
+    def mode(self):
+        out = self._dist.mean
+        if self.absmax is not None:
+            out *= (self.absmax / torch.clip(torch.abs(out), min=self.absmax)).detach()
+        return out
+
+    def sample(self, sample_shape=()):
+        out = self._dist.rsample(sample_shape)
+        if self.absmax is not None:
+            out *= (self.absmax / torch.clip(torch.abs(out), min=self.absmax)).detach()
+        return out
+
+    def log_prob(self, x):
+        return self._dist.log_prob(x)
+
+
+class Bernoulli:
+    def __init__(self, dist=None):
+        super().__init__()
+        self._dist = dist
+        self.mean = dist.mean
+
+    def __getattr__(self, name):
+        return getattr(self._dist, name)
+
+    def entropy(self):
+        return self._dist.entropy()
+
+    def mode(self):
+        _mode = torch.round(self._dist.mean)
+        return _mode.detach() + self._dist.mean - self._dist.mean.detach()
+
+    def sample(self, sample_shape=()):
+        return self._dist.rsample(sample_shape)
+
+    def log_prob(self, x):
+        _logits = self._dist.base_dist.logits
+        log_probs0 = -F.softplus(_logits)
+        log_probs1 = -F.softplus(-_logits)
+
+        return torch.sum(log_probs0 * (1 - x) + log_probs1 * x, -1)
+
+
+class UnnormalizedHuber(torchd.normal.Normal):
+    def __init__(self, loc, scale, threshold=1, **kwargs):
+        super().__init__(loc, scale, **kwargs)
+        self._threshold = threshold
+
+    def log_prob(self, event):
+        return -(torch.sqrt((event - self.mean) ** 2 + self._threshold**2) - self._threshold)
+
+    def mode(self):
+        return self.mean
+
+
+class SafeTruncatedNormal(torchd.normal.Normal):
+    def __init__(self, loc, scale, low, high, clip=1e-6, mult=1):
+        super().__init__(loc, scale)
+        self._low = low
+        self._high = high
+        self._clip = clip
+        self._mult = mult
+
+    def sample(self, sample_shape):
+        event = super().sample(sample_shape)
+        if self._clip:
+            clipped = torch.clip(event, self._low + self._clip, self._high - self._clip)
+            event = event - event.detach() + clipped.detach()
+        if self._mult:
+            event *= self._mult
+        return event
+
+
+class TanhBijector(torchd.Transform):
+    def __init__(self, validate_args=False, name="tanh"):
+        super().__init__()
+
+    def _forward(self, x):
+        return torch.tanh(x)
+
+    def _inverse(self, y):
+        y = torch.where((torch.abs(y) <= 1.0), torch.clamp(y, -0.99999997, 0.99999997), y)
+        y = torch.atanh(y)
+        return y
+
+    def _forward_log_det_jacobian(self, x):
+        log2 = torch.math.log(2.0)
+        return 2.0 * (log2 - x - torch.softplus(-2.0 * x))
+
+
+#endregion
