@@ -4,6 +4,7 @@ import torch
 
 import replay
 import utils
+import gymnasium as gym
 from agent import AgentTrainer
 from wm import WorldModelTrainer
 
@@ -73,7 +74,10 @@ class Trainer:
 
     def _env_step(self, a, stacked_a):
         env = self.env
-        next_o, next_r, next_term, next_trunc, _ = env.step(a.cpu().item())
+        action = a.detach().cpu().numpy()
+        if isinstance(env.action_space, gym.spaces.MultiDiscrete):
+            action = action.item()
+        next_o, next_r, next_term, next_trunc, _ = env.step(action)
         cont_o = next_o
         if next_term or next_trunc:
             cont_o, _ = env.reset()
