@@ -457,7 +457,10 @@ class EpisodeCollector:
     """Utility class for collecting episodes."""
 
     def __init__(self, env_id, wrappers, kwargs, num_parallel):
-        self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode='async', wrappers=wrappers, **kwargs)
+        if num_parallel == 1:
+            self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode='sync', wrappers=wrappers, **kwargs)
+        else:
+            self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode='async', wrappers=wrappers, **kwargs)
 
     def close(self):
         self.vector_env.close()

@@ -6,6 +6,7 @@ env:
   camera_id: 0
   width: 64
   height: 64
+  max_frames: 1000
   frame_stack: 4
   action_repeat: 2
 
@@ -168,6 +169,7 @@ trainer:
       camera_id: 0
       width: 64
       height: 64
+      max_frames: 1000
       frame_stack: 4
       action_repeat: 2
     eval_num_parallel: 20
