@@ -31,7 +31,7 @@ def safety_gymnasium(game, make, camera_name, width, height, max_frames, frame_s
         partial(safetygym.wrappers.SafetyGymnasium2Gymnasium),
         partial(gym.wrappers.TimeLimit, max_episode_steps=max_frames),
         partial(SafetyGymnasiumImgObsWrapper, action_repeat=action_repeat),
-        partial(gym.wrappers.FrameStack, num_stack=frame_stack), # For gymnasium <= v1.0.0
+        partial(gym.wrappers.FrameStack, num_stack=frame_stack),  # For gymnasium <= v1.0.0
     ]
 
     kwargs = dict(render_mode="rgb_array", camera_name=camera_name, width=width, height=height)
@@ -50,6 +50,7 @@ def dmc(game, make, camera_id, width, height, max_frames, frame_stack, action_re
     except ImportError:
         raise ImportError("Please install shimmy.")
     from packaging import version
+
     assert version.parse(gym.__version__) >= version.parse("1.1.0"), "gymnasium version must be >= 1.1.0"
 
     gym.register_envs(shimmy)
@@ -170,7 +171,6 @@ class SafetyGymnasiumFullObsWrapper(gym.Wrapper):
         return obs, total_reward, terminated, truncated, final_info
 
 
-
 class SafetyGymnasiumImgObsWrapper(gym.Wrapper):
     def __init__(self, env, action_repeat=1):
         super().__init__(env)
@@ -198,6 +198,8 @@ class SafetyGymnasiumImgObsWrapper(gym.Wrapper):
         final_info['cost'] = total_cost
 
         return img_obs, total_reward, terminated, truncated, final_info
+
+
 # endregion
 
 
@@ -222,7 +224,7 @@ class DMCWrapper(gym.Wrapper):
         for _ in range(self._action_repeat):
             _, next_r, next_term, next_trunc, info = self.env.step(action)
             reward += next_r
-            if next_term or next_trunc:
+            if np.logical_or(next_term, next_trunc):
                 break
 
         next_o = self.env.render()
@@ -362,14 +364,7 @@ class FireLifeWrapper(gym.Wrapper):
 if __name__ == "__main__":
 
     name = 'safety_gym:SafetyPointGoal1'
-    env_config = {
-        'camera_name': None,
-        'width': 64,
-        'height': 64,
-        'max_frames': 1000,
-        'frame_stack': 4,
-        'action_repeat': 2
-    }
+    env_config = {'camera_name': None, 'width': 64, 'height': 64, 'max_frames': 1000, 'frame_stack': 4, 'action_repeat': 2}
     # Example usage
     env = make_env(name, make=True, env_config=env_config)
     env.reset(seed=42)
