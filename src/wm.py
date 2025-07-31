@@ -22,8 +22,8 @@ class WorldModel(nn.Module):
         if not (isinstance(observation_space, gym.spaces.Box) and len(observation_space.shape) == 4):
             raise ValueError('Observation space is not supported')
 
-        if not isinstance(stacked_action_space, gym.spaces.MultiDiscrete):
-            raise ValueError('Action space is not supported')
+        # if not isinstance(stacked_action_space, gym.spaces.MultiDiscrete):
+        #     raise ValueError('Action space is not supported')
 
         self.observation_space = observation_space
         self.stacked_action_space = stacked_action_space
@@ -51,6 +51,7 @@ class WorldModel(nn.Module):
         self.cov_coef = cov_coef
         self.reward_coef = reward_coef
         self.terminal_coef = terminal_coef
+        self.device = device
 
     def representation_modules(self):
         """ Modules that are part of representation learning. """
@@ -92,6 +93,7 @@ class WorldModel(nn.Module):
     def encode(self, o, dtype=None):
         """ Preprocess and encode an observation tensor. """
         o = self.preprocess(o, dtype=dtype)
+        o = o.to()
         y = self.encoder(o)
         return y
 
@@ -295,7 +297,9 @@ class WorldModelTrainer:
     def train(self, it):
         """ Train the world model for one iteration. """
         idx = self.replay_buffer.sample_idx(self.batch_size, self.rng)
+        target_device = self.wm.device
         o, stacked_a, next_r, next_term, next_o = self.replay_buffer.get(idx, 'o', 'a', 'next_r', 'next_term', 'next_o')
+        o, stacked_a, next_r, next_term, next_o = o.to(target_device), stacked_a.to(target_device), next_r.to(target_device), next_term.to(target_device), next_o.to(target_device)
 
         self.wm.train()
         metrics, y = self._optimize(o, stacked_a, next_r, next_term, next_o, it)
@@ -328,6 +332,9 @@ class WorldModelTrainer:
             fixed_o, fixed_term, fixed_trunc = replay_buffer.get(fixed_idx, 'next_o', 'next_term', 'next_trunc')
             random_idx = eval_rng.choice(len(replay_buffer), num_obs, replace=False)
             random_o, random_term, random_trunc = replay_buffer.get(random_idx, 'next_o', 'next_term', 'next_trunc')
+            fixed_o, fixed_term, fixed_trunc = fixed_o.to(wm.device), fixed_term.to(wm.device), fixed_trunc.to(wm.device)
+            random_o, random_term, random_trunc = random_o.to(wm.device), random_term.to(wm.device), random_trunc.to(wm.device)
+
             o = torch.cat([fixed_o, random_o], 0)
             term = torch.cat([fixed_term, random_term], 0)
             trunc = torch.cat([fixed_trunc, random_trunc], 0)

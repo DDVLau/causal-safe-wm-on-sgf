@@ -4,6 +4,7 @@ import torch
 
 import replay
 import utils
+import gymnasium as gym
 from agent import AgentTrainer
 from wm import WorldModelTrainer
 
@@ -60,7 +61,8 @@ class Trainer:
         with autocast():
             with torch.no_grad():
                 self.agent_state = agent.start()
-                self.cont_mask = utils.get_mask(torch.ones(1, dtype=torch.bool, device=replay_buffer.device))
+                # self.cont_mask = utils.get_mask(torch.ones(1, dtype=torch.bool, device=replay_buffer.device))
+                self.cont_mask = utils.get_mask(torch.ones(1, dtype=torch.bool, device=self.wm.device))
                 for _ in range(init_steps):
                     a, stacked_a, self.agent_state = agent.act_randomly(self.agent_state, self.cont_mask, self.rng)
                     self._env_step(a, stacked_a)
@@ -73,12 +75,16 @@ class Trainer:
 
     def _env_step(self, a, stacked_a):
         env = self.env
-        next_o, next_r, next_term, next_trunc, _ = env.step(a.cpu().item())
+        action = a.detach().cpu().numpy()
+        if isinstance(env.action_space, gym.spaces.MultiDiscrete):
+            action = action.item()
+        next_o, next_r, next_term, next_trunc, _ = env.step(action)
         cont_o = next_o
         if next_term or next_trunc:
             cont_o, _ = env.reset()
         next_r, next_term, next_trunc, next_o = \
             self.replay_buffer.step(stacked_a, next_o, next_r, next_term, next_trunc, cont_o)
+        next_term, next_trunc = next_term.to(self.wm.device), next_trunc.to(self.wm.device)
         self.cont_mask = utils.get_mask(~(next_term | next_trunc))
 
     def train(self):
@@ -94,6 +100,7 @@ class Trainer:
         with self.autocast():
             with torch.no_grad():
                 o = self.replay_buffer.cont_o
+                o = o.to(wm.device)
                 y = wm.encode(o)
                 if self.rng.random() < self.env_epsilon:
                     a, stacked_a, self.agent_state = agent.act_randomly(self.agent_state, self.cont_mask, self.rng)
