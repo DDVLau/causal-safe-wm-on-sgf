@@ -19,6 +19,8 @@ def random_generator(seed):
 def seed_everything(seed):
     """Seed all random number generators."""
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     return random_generator(seed)
 
