@@ -7,20 +7,33 @@ requires-python = ">=3.10.18"
 dependencies = [
     "torch==2.5.1",
     "torchvision<=0.22.1",
-    "gymnasium['other']>=1.1.0",
     "numpy<2.0.0",
     "ruamel-yaml>=0.18.14",
     "wandb>=0.21.0",
+]
+[dependency-groups]
+safetygym = [
+    "gymnasium==0.28.1",
     "safety_gymnasium",
+]
+others = [
+    "gymnasium[other]>=1.1.0",
     "ale-py>=0.11.2",
     "dm-tree (==0.1.8)",
     "shimmy[dm-control] (>=2.0.0, <3.0.0)",
 ]
 
+
 [tool.uv]
 environments = [
     "sys_platform == 'darwin' and platform_machine == 'arm64'",
     "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+conflicts = [
+    [
+      { group = "safetygym" },
+      { group = "others" },
+    ],
 ]
 
 [tool.uv.sources]
@@ -32,7 +45,7 @@ torchvision = [
   { index = "pytorch-cpu", marker = "sys_platform != 'linux'" },
   { index = "pytorch-cu124", marker = "sys_platform == 'linux'" },
 ]
-safety_gymnasium = { path = "./safety-gymnasium-main"}
+safety_gymnasium = { path = "./safety-gymnasium-main" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

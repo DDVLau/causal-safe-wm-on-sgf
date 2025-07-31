@@ -11,20 +11,30 @@ def make_env(env_name, make, env_config):
     elif suite == 'atari':
         env = atari(game=game, make=make, **env_config)
     elif suite == 'safety_gym':
-        raise NotImplementedError('Safety Gym environments are not supported yet.')
+        env = safety_gymnasium(game=game, make=make, **env_config)
     else:
-        raise ValueError(f'Unsupported: {suite}')
+        raise ValueError(f'Unsupported: {suite}:{game}')
     return env
 
 
-def safety_gymnasium(game, make, size):
-    import safety_gymnasium as safetygym
+def safety_gymnasium(game, make, camera_name, width, height, max_frames, frame_stack, action_repeat):
+    try:
+        import safety_gymnasium as safetygym
+    except ImportError:
+        raise ImportError("Please install safety_gymnasium.")
 
     version = 'v0'
     env_id = f'{game}-{version}'
-    wrappers = []
+    if camera_name is None:
+        camera_name = "vision"
+    wrappers = [
+        partial(safetygym.wrappers.SafetyGymnasium2Gymnasium),
+        partial(gym.wrappers.TimeLimit, max_episode_steps=max_frames),
+        partial(SafetyGymnasiumImgObsWrapper, action_repeat=action_repeat),
+        partial(gym.wrappers.FrameStack, num_stack=frame_stack), # For gymnasium <= v1.0.0
+    ]
 
-    kwargs = dict(render_mode="rgb_array", camera_name="vision", width=size[0], height=size[1])
+    kwargs = dict(render_mode="rgb_array", camera_name=camera_name, width=width, height=height)
     if make:
         env = safetygym.make(env_id, **kwargs)
         for wrapper in wrappers:
@@ -34,8 +44,13 @@ def safety_gymnasium(game, make, size):
         return env_id, wrappers, kwargs
 
 
-def dmc(game, make, camera_id, width, height, frame_stack, action_repeat):
-    import shimmy
+def dmc(game, make, camera_id, width, height, max_frames, frame_stack, action_repeat):
+    try:
+        import shimmy
+    except ImportError:
+        raise ImportError("Please install shimmy.")
+    from packaging import version
+    assert version.parse(gym.__version__) >= version.parse("1.1.0"), "gymnasium version must be >= 1.1.0"
 
     gym.register_envs(shimmy)
 
@@ -47,6 +62,7 @@ def dmc(game, make, camera_id, width, height, frame_stack, action_repeat):
     render_kwargs = dict(camera_id=camera_id, width=width, height=height)
 
     wrappers = [
+        partial(gym.wrappers.TimeLimit, max_episode_steps=max_frames),
         partial(DMCWrapper, action_repeat=action_repeat),
         partial(gym.wrappers.FrameStackObservation, stack_size=frame_stack),
     ]
@@ -113,6 +129,76 @@ def atari(
         return env
     else:
         return env_id, wrappers, kwargs
+
+
+# region SafetyGymnasium wrappers
+
+
+class SafetyGymnasiumFullObsWrapper(gym.Wrapper):
+    def __init__(self, env, action_repeat=1):
+        super().__init__(env)
+        old_observation_space = self.env.observation_space
+        self.observation_space = gym.spaces.Dict(
+            {
+                "lidar": old_observation_space,
+                "image": gym.spaces.Box(0, 255, (self.env.spec.kwargs['height'], self.env.spec.kwargs['width'], 3), dtype=np.uint8),
+            }
+        )
+        self._action_repeat = action_repeat
+
+    def reset(self, **kwargs):
+        lidar_obs, info = self.env.reset(**kwargs)
+        img_obs = self.env.render()
+        return {"lidar": lidar_obs, "image": img_obs}, info
+
+    def step(self, action):
+        total_reward, total_cost = 0, 0
+        final_info = {'cost_hazards': 0.0, 'cost_sum': 0.0}
+        for _ in range(self._action_repeat):
+            lidar_obs, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+            total_cost += info.get("cost", 0)
+            final_info["cost_hazards"] += info.get("cost_hazards", 0)
+            final_info["cost_sum"] += info.get("cost_sum", 0)
+            if np.logical_or(terminated, truncated):
+                break
+
+        img_obs = self.env.render()
+        obs = {"lidar": lidar_obs, "image": img_obs}
+        final_info['cost'] = total_cost
+
+        return obs, total_reward, terminated, truncated, final_info
+
+
+
+class SafetyGymnasiumImgObsWrapper(gym.Wrapper):
+    def __init__(self, env, action_repeat=1):
+        super().__init__(env)
+        self.observation_space = gym.spaces.Box(0, 255, (self.env.spec.kwargs['height'], self.env.spec.kwargs['width'], 3), dtype=np.uint8)
+        self._action_repeat = action_repeat
+
+    def reset(self, **kwargs):
+        _, info = self.env.reset(**kwargs)
+        img_obs = self.env.render()
+        return img_obs, info
+
+    def step(self, action):
+        total_reward, total_cost = 0, 0
+        final_info = {'cost_hazards': 0.0, 'cost_sum': 0.0}
+        for _ in range(self._action_repeat):
+            _, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+            total_cost += info.get("cost", 0)
+            final_info["cost_hazards"] += info.get("cost_hazards", 0)
+            final_info["cost_sum"] += info.get("cost_sum", 0)
+            if np.logical_or(terminated, truncated):
+                break
+
+        img_obs = self.env.render()
+        final_info['cost'] = total_cost
+
+        return img_obs, total_reward, terminated, truncated, final_info
+# endregion
 
 
 # region DMC wrappers
@@ -274,12 +360,20 @@ class FireLifeWrapper(gym.Wrapper):
 
 
 if __name__ == "__main__":
-    from shimmy.registration import DM_CONTROL_SUITE_ENVS
 
-    env_ids = [f"dm_control/{'-'.join(item)}-v0" for item in DM_CONTROL_SUITE_ENVS]
+    name = 'safety_gym:SafetyPointGoal1'
+    env_config = {
+        'camera_name': None,
+        'width': 64,
+        'height': 64,
+        'max_frames': 1000,
+        'frame_stack': 4,
+        'action_repeat': 2
+    }
     # Example usage
-    env = dmc("acrobot_swingup", make=True, camera_id=None, width=64, height=64, action_repeat=2)
+    env = make_env(name, make=True, env_config=env_config)
     env.reset(seed=42)
     print(env.render())
-    print(env.observation_space())
+    print(env.observation_space)
+    print(env.step(env.action_space.sample()))
     env.close()
