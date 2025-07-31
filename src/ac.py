@@ -60,10 +60,10 @@ class Actor(nn.Module):
         modules, backbone_dim = nets.mlp(x_dim, dims, norm, act, init, out_bias=True, out_norm=True, device=device)
         self.layers = nn.Sequential(*modules)
 
-        self.mean_layer = nets.init_(nn.Linear(backbone_dim, a_dim), out_init)
+        self.mean_layer = nets.init_(nn.Linear(backbone_dim, a_dim, device=device), out_init)
         if self._std == "learned":
             assert dist in ("tanh_normal", "normal", "trunc_normal", "huber"), dist
-            self.std_layer = nets.init_(nn.Linear(backbone_dim, a_dim), out_init)
+            self.std_layer = nets.init_(nn.Linear(backbone_dim, a_dim, device=device), out_init)
 
     def get_stats(self, inp, full_precision=False):
         x = inp

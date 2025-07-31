@@ -116,12 +116,14 @@ class AgentTrainer:
                     # sample start from replay buffer
                     idx = buffer.sample_idx(batch_size, self.rng)
                     o = buffer.get(idx, 'next_o')[0]
+                    o = o.to(wm.device)
                     start_y = wm.encode(o)
                 elif start_y.shape[0] >= batch_size:
                     start_y = start_y[:batch_size]
                 else:
                     idx = buffer.sample_idx(batch_size - start_y.shape[0], self.rng)
                     remaining_o = buffer.get(idx, 'next_o')[0]
+                    remaining_o = remaining_o.to(wm.device)
                     remaining_y = wm.encode(remaining_o)
                     start_y = torch.cat([start_y, remaining_y], 0)
 

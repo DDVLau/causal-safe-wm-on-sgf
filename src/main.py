@@ -17,6 +17,7 @@ def main():
     # Parse command line arguments
     parser = ArgumentParser()
     parser.add_argument('--device', type=str, required=True, help='The device used for training')
+    parser.add_argument('--buffer_device', type=str, required=False, help='The device used for buffer')
     parser.add_argument('--game', type=str, required=True, help='The Atari game, e.g., "Breakout"')
     parser.add_argument('--seed', type=int, required=True, help='The random seed to use for reproducibility')
     parser.add_argument('--config', type=str, required=True, help='The configuration file')
@@ -45,6 +46,7 @@ def main():
 
     # Setup the device, torch.autocast, and torch.compile
     device = torch.device(args.device)
+    buffer_device = torch.device(args.buffer_device if hasattr(args, "buffer_device") else args.device)
     autocast = lambda: torch.autocast(device_type=device.type, enabled=config.amp)
     # The arguments of torch.compile can be set here
     compile_ = lambda mod: torch.compile(mod, dynamic=True, disable=not config.compile)
@@ -64,7 +66,7 @@ def main():
 
     # Initialize the trainer
     trainer = Trainer(env, config.game, wm, agent, seed, **config.trainer,
-                      wm_eval=config.wm_eval, agent_eval=config.agent_eval, buffer_device=device,
+                      wm_eval=config.wm_eval, agent_eval=config.agent_eval, buffer_device=buffer_device,
                       rng=rng, autocast=autocast, compile_=compile_)
 
     print(f'Starting... (seed: {seed})')
