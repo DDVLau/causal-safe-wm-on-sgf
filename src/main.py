@@ -46,7 +46,7 @@ def main():
 
     # Setup the device, torch.autocast, and torch.compile
     device = torch.device(args.device)
-    buffer_device = torch.device(args.buffer_device if hasattr(args, "buffer_device") else args.device)
+    buffer_device = torch.device(args.buffer_device if hasattr(args, "buffer_device") and args.buffer_device else args.device)
     autocast = lambda: torch.autocast(device_type=device.type, enabled=config.amp)
     # The arguments of torch.compile can be set here
     compile_ = lambda mod: torch.compile(mod, dynamic=True, disable=not config.compile)

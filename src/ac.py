@@ -38,7 +38,7 @@ class Actor(nn.Module):
         init,
         out_init,
         dist="normal",
-        std=1.0,
+        std="learned",
         min_std=0.1,
         max_std=10.0,
         absmax=None,

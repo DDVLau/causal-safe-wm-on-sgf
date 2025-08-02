@@ -89,6 +89,8 @@ policy:
     act: silu
     init: truncated_normal
     out_init: zeros
+    dist: onehot
+    std: 1.0
 
   critic:
     dims: 512-512
