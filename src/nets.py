@@ -527,13 +527,14 @@ class Optimizer:
     """ Wrapper for an optimizer that handles learning rate scheduling,
         gradient clipping, and gradient scaling (autocast). """
 
-    def __init__(self, module, type, base_lr, end_lr, warmup_its, total_its, clip, *, autocast, **kwargs):
+    def __init__(self, module, type, base_lr, end_lr, warmup_its, total_its, clip, *, name=None, autocast, **kwargs):
         self.module = module
         self.base_lr = base_lr
         self.end_lr = end_lr if end_lr is not None else base_lr
         self.warmup_its = warmup_its
         self.total_its = total_its
         self.clip = clip
+        self.name = name if name is not None else ''
 
         if type == 'sgd':
             optim_cls = optim.SGD
@@ -572,7 +573,8 @@ class Optimizer:
         clip = self.clip
         if clip is not None and clip != 0:
             self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.module.parameters(), clip)
+            norm = torch.nn.utils.clip_grad_norm_(self.module.parameters(), clip)
 
         self.scaler.step(self.optimizer)
         self.scaler.update()
+        return {f'{self.name}_grad_norm': norm.detach().cpu().item()}
