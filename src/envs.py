@@ -27,21 +27,20 @@ def safety_gymnasium(game, make, camera_name, width, height, max_frames, frame_s
     env_id = f'{game}-{version}'
     if camera_name is None:
         camera_name = "vision"
-    wrappers = [
+    wrappers = (
         partial(safetygym.wrappers.SafetyGymnasium2Gymnasium),
-        partial(gym.wrappers.TimeLimit, max_episode_steps=max_frames),
         partial(SafetyGymnasiumImgObsWrapper, action_repeat=action_repeat),
         partial(gym.wrappers.FrameStack, num_stack=frame_stack),  # For gymnasium <= v1.0.0
-    ]
+    )
 
-    kwargs = dict(render_mode="rgb_array", camera_name=camera_name, width=width, height=height)
+    kwargs = dict(render_mode="rgb_array", camera_name=camera_name, width=width, height=height, max_episode_steps=max_frames)
     if make:
         env = safetygym.make(env_id, **kwargs)
         for wrapper in wrappers:
             env = wrapper(env)
         return env
     else:
-        return env_id, wrappers, kwargs
+        return f'safety_gymnasium:{env_id}', wrappers, kwargs
 
 
 def dmc(game, make, camera_id, width, height, max_frames, frame_stack, action_repeat):
@@ -174,7 +173,13 @@ class SafetyGymnasiumFullObsWrapper(gym.Wrapper):
 class SafetyGymnasiumImgObsWrapper(gym.Wrapper):
     def __init__(self, env, action_repeat=1):
         super().__init__(env)
-        self.observation_space = gym.spaces.Box(0, 255, (self.env.spec.kwargs['height'], self.env.spec.kwargs['width'], 3), dtype=np.uint8)
+        height = self.env.spec.kwargs.get('height', None)
+        width = self.env.spec.kwargs.get('width', None)
+        if height is None:
+            height = getattr(self.env.spec, 'render_parameters', {}).get('height', 64)
+        if width is None:
+            width = getattr(self.env.spec, 'render_parameters', {}).get('width', 64)
+        self.observation_space = gym.spaces.Box(0, 255, (height, width, 3), dtype=np.uint8)
         self._action_repeat = action_repeat
 
     def reset(self, **kwargs):
@@ -186,7 +191,7 @@ class SafetyGymnasiumImgObsWrapper(gym.Wrapper):
         total_reward, total_cost = 0, 0
         final_info = {'cost_hazards': 0.0, 'cost_sum': 0.0}
         for _ in range(self._action_repeat):
-            _, reward, terminated, truncated, info = self.env.step(action)
+            _, reward, terminated, truncated, info = super().step(action)
             total_reward += reward
             total_cost += info.get("cost", 0)
             final_info["cost_hazards"] += info.get("cost_hazards", 0)

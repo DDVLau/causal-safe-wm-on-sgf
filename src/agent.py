@@ -127,15 +127,21 @@ class AgentTrainer:
                     remaining_y = wm.encode(remaining_o)
                     start_y = torch.cat([start_y, remaining_y], 0)
 
-                ys, as_, _, next_ys, next_rs, next_terms = wm.imagine(agent, self.horizon, start_y)
+                outs = wm.imagine(agent, self.horizon, start_y)
+                if len(outs) == 6:
+                    ys, as_, _, next_ys, next_rs, next_terms = outs
+                    next_cs = None
+                elif len(outs) == 7:
+                    ys, as_, _, next_ys, next_rs, next_cs, next_terms = outs
 
                 ys = torch.stack(ys, 0)
                 as_ = torch.stack(as_, 0)
                 next_terms = torch.stack(next_terms, 0)
                 next_rs = torch.stack(next_rs, 0)
+                next_cs = torch.stack(next_cs, 0) if next_cs is not None else None
 
         # Train the policy on the synthesized data
-        metrics = self.policy_trainer.train(it, ys, next_ys[-1], as_, next_rs, next_terms)
+        metrics = self.policy_trainer.train(it, ys, next_ys[-1], as_, next_rs, next_cs, next_terms)
         return metrics
 
     @torch.no_grad()

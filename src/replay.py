@@ -5,15 +5,16 @@ import utils
 
 
 class ReplayBuffer:
-    """ Replay buffer for storing transitions. """
+    """Replay buffer for storing transitions."""
 
-    def __init__(self, observation_space, action_space, capacity, start_o, device):
+    def __init__(self, observation_space, action_space, capacity, start_o, use_cost, device):
         self.observation_space = observation_space
         self.action_space = action_space
 
         self.observations = utils.space_zeros(observation_space, capacity, device=device)
         self.actions = utils.space_zeros(action_space, capacity, device=device)
         self.next_rewards = torch.zeros(capacity, dtype=torch.float32, device=device)
+        self.next_costs = torch.zeros(capacity, dtype=torch.float32, device=device) if use_cost else None
         self.next_terms = torch.zeros(capacity, dtype=torch.bool, device=device)
         self.next_truncs = torch.zeros(capacity, dtype=torch.bool, device=device)
         self.next_observations = utils.space_zeros(observation_space, capacity, device=device)
@@ -23,6 +24,10 @@ class ReplayBuffer:
 
         self.episode_reward = 0.0
         self.episode_rewards = []
+        # For CMDP
+        self.use_cost = use_cost
+        self.episode_cost = 0.0
+        self.episode_costs = []
 
     def to(self, device):
         if device == self.observations.device:
@@ -31,6 +36,8 @@ class ReplayBuffer:
         self.observations = self.observations.to(device, non_blocking=True)
         self.actions = self.actions.to(device, non_blocking=True)
         self.next_rewards = self.next_rewards.to(device, non_blocking=True)
+        if self.next_costs is not None:
+            self.next_costs = self.next_costs.to(device, non_blocking=True)
         self.next_terms = self.next_terms.to(device, non_blocking=True)
         self.next_truncs = self.next_truncs.to(device, non_blocking=True)
         self.next_observations = self.next_observations.to(device, non_blocking=True)
@@ -47,20 +54,31 @@ class ReplayBuffer:
 
     @property
     def cont_o(self):
-        """ Get the last observation, can be used to select the next action. """
+        """Get the last observation, can be used to select the next action."""
         return self.observations[self.len].unsqueeze(0)
 
     def __len__(self):
         return self.len
 
     def get(self, idx, *keys):
-        """ Get the data at the given indices. """
+        """Get the data at the given indices."""
 
         if len(keys) == 0:
-            keys = ('o', 'a', 'next_r', 'next_term', 'next_trunc', 'next_o')
+            if self.use_cost:
+                keys = ('o', 'a', 'next_r', 'next_c', 'next_term', 'next_trunc', 'next_o')
+            else:
+                keys = ('o', 'a', 'next_r', 'next_term', 'next_trunc', 'next_o')
 
-        tensors = {'o': self.observations, 'a': self.actions, 'next_r': self.next_rewards,
-                   'next_term': self.next_terms, 'next_trunc': self.next_truncs, 'next_o': self.next_observations}
+        tensors = {
+            'o': self.observations,
+            'a': self.actions,
+            'next_r': self.next_rewards,
+            'next_term': self.next_terms,
+            'next_trunc': self.next_truncs,
+            'next_o': self.next_observations,
+        }
+        if self.use_cost:
+            tensors['next_c'] = self.next_costs
 
         tensors = tuple(tensors[key] for key in keys)
 
@@ -93,27 +111,27 @@ class ReplayBuffer:
         else:
             raise ValueError()
 
-    def step(self, a, next_o, next_r, next_term, next_trunc, cont_o):
-        """ Add a transition to the buffer. """
+    def step(self, a, next_o, next_r, next_c, next_term, next_trunc, cont_o):
+        """Add a transition to the buffer."""
 
         if self.len >= self.capacity:
             raise ValueError('Buffer is full')
 
         i = self.len
-        next_o = torch.as_tensor(np.array(next_o), dtype=self.observations.dtype) \
-            .to(device=self.observations.device, non_blocking=True)
+        next_o = torch.as_tensor(np.array(next_o), dtype=self.observations.dtype).to(device=self.observations.device, non_blocking=True)
         self.next_observations[i] = next_o
 
         self.actions[i] = a
         self.next_rewards[i] = next_r
+        if self.use_cost:
+            self.next_costs[i] = next_c
         self.next_terms[i] = next_term
         self.next_truncs[i] = next_trunc
 
         self.episode_reward += next_r
 
         if next_term or next_trunc:
-            next_o = torch.as_tensor(np.array(cont_o), dtype=self.observations.dtype) \
-                .to(device=self.observations.device, non_blocking=True)
+            next_o = torch.as_tensor(np.array(cont_o), dtype=self.observations.dtype).to(device=self.observations.device, non_blocking=True)
 
             self.episode_rewards.append(self.episode_reward)
             self.episode_reward = 0.0
@@ -125,21 +143,25 @@ class ReplayBuffer:
         next_r = self.next_rewards[i]
         next_term = self.next_terms[i]
         next_trunc = self.next_truncs[i]
-        return next_r.unsqueeze(0), next_term.unsqueeze(0), next_trunc.unsqueeze(0), next_o.unsqueeze(0)
+        if self.use_cost:
+            next_c = self.next_costs[i]
+            return next_r.unsqueeze(0), next_c.unsqueeze(0), next_term.unsqueeze(0), next_trunc.unsqueeze(0), next_o.unsqueeze(0)
+        else:
+            return next_r.unsqueeze(0), next_term.unsqueeze(0), next_trunc.unsqueeze(0), next_o.unsqueeze(0)
 
     def sample_idx(self, count, rng):
-        """ Sample indices from the buffer. """
+        """Sample indices from the buffer."""
         idx = rng.choice(self.len, count, replace=False, shuffle=False)
         idx = torch.as_tensor(idx).to(device=self.device, non_blocking=True)
         return idx
 
     def get_stats(self):
-        """ Get statistics about the buffer. """
+        """Get statistics about the buffer."""
         episode_rewards = np.array(self.episode_rewards)
         stats = {
             'buffer_size': self.len,
             'buffer_episodes': len(episode_rewards),
             'buffer_max_episode_reward': np.max(episode_rewards),
-            'buffer_total_reward': np.sum(episode_rewards)
+            'buffer_total_reward': np.sum(episode_rewards),
         }
         return stats

@@ -10,6 +10,7 @@ dependencies = [
     "numpy<2.0.0",
     "ruamel-yaml>=0.18.14",
     "wandb>=0.21.0",
+    "moviepy>=2.2.1",
 ]
 [dependency-groups]
 safetygym = [

@@ -460,7 +460,18 @@ class EpisodeCollector:
 
     def __init__(self, env_id, wrappers, kwargs, num_parallel):
         if num_parallel == 1:
-            self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode='sync', wrappers=wrappers, **kwargs)
+            # Special handling for safety_gymnasium environments
+            if env_id.startswith('safety_gym'):
+                try:
+                    import safety_gymnasium
+                except ImportError:
+                    raise ImportError("Please install safety-gymnasium.")
+                env = safety_gymnasium.make(env_id.split(':', 1)[1], **kwargs)
+                for wrapper in wrappers:
+                    env = wrapper(env)
+                self.vector_env = env
+            else:
+                self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode='sync', wrappers=wrappers, **kwargs)
         else:
             self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode='async', wrappers=wrappers, **kwargs)
 
@@ -469,34 +480,52 @@ class EpisodeCollector:
 
     def collect(self, seed, num_episodes, policy_fn, reset_fn, step_fn, aggregate_fn):
         vector_env = self.vector_env
-        num_parallel = vector_env.num_envs
+        num_parallel = getattr(vector_env, 'num_envs', 1)
         if (num_episodes % num_parallel) != 0:
             warnings.warn('Number of episodes is not divisible by the number of parallel environments')
 
         aggs = []
         num_done = 0
-        a = gym.vector.utils.create_empty_array(vector_env.action_space, n=1)[0]
 
         while num_done < num_episodes:
-            cont = np.ones(num_parallel, dtype=bool)
-            just_done = np.zeros(num_parallel)
-            overflow = num_done + num_parallel - num_episodes
-            if overflow > 0:
-                cont[-overflow:] = False
-                just_done = just_done[:-overflow]
-            o, _ = vector_env.reset(seed=seed + num_done)
-            agg = reset_fn(cont, o)
-            state = None  # policy state
-            while np.any(cont):
-                cont_a, state = policy_fn(o[cont], state, just_done)
-                a.fill(0)
-                a[cont] = cont_a
-                next_o, next_r, next_term, next_trunc, info = vector_env.step(a)
-                next_done = next_term | next_trunc
-                agg = step_fn(agg, cont, o, a, next_o, next_r, next_term, next_trunc)
-                just_done = next_done[cont]
-                cont = cont & ~next_done
-                o = next_o
+            if num_parallel == 1:
+                o, _ = vector_env.reset(seed=seed + num_done)
+                agg = reset_fn(np.array([True]), o)
+                state = None
+                done = False
+                just_done = np.array([False])
+                while not done:
+                    if len(o.shape) == 4:
+                        o = np.array(o)[None, ...]
+                    a, state = policy_fn(o, state, just_done)
+                    next_o, next_r, next_term, next_trunc, info = vector_env.step(a.squeeze(0))
+                    done = next_term or next_trunc
+                    agg['episode_reward'][0] += next_r
+                    agg['episode_length'][0] += 1
+                    just_done = np.array([done])
+                    o = next_o
+            else:
+                a = gym.vector.utils.create_empty_array(vector_env.action_space, n=1)[0]
+                cont = np.ones(num_parallel, dtype=bool)
+                just_done = np.zeros(num_parallel)
+                overflow = num_done + num_parallel - num_episodes
+                if overflow > 0:
+                    cont[-overflow:] = False
+                    just_done = just_done[:-overflow]
+                o, _ = vector_env.reset(seed=seed + num_done)
+                agg = reset_fn(cont, o)
+                state = None  # policy state
+                while np.any(cont):
+                    cont_a, state = policy_fn(o[cont], state, just_done)
+                    a.fill(0)
+                    a[cont] = cont_a
+                    next_o, next_r, next_term, next_trunc, info = vector_env.step(a)
+                    next_done = next_term | next_trunc
+                    agg = step_fn(agg, cont, o, a, next_o, next_r, next_term, next_trunc)
+                    just_done = next_done[cont]
+                    cont = cont & ~next_done
+                    o = next_o
+            
             num_done += num_parallel
             aggs.append(agg)
 

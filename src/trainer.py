@@ -6,7 +6,7 @@ import replay
 import utils
 import gymnasium as gym
 from agent import AgentTrainer
-from wm import WorldModelTrainer
+from wm import WorldModelTrainer, WorldModelDecomposedTrainer
 
 
 class Trainer:
@@ -14,7 +14,7 @@ class Trainer:
 
     def __init__(self, env, game, wm, agent, seed, env_steps, init_steps, env_epsilon, env_temperature,
                  wm_every, agent_every, log_every, eval_every, wm_trainer, agent_trainer,
-                 wm_eval, agent_eval, buffer_device, *, rng, autocast, compile_):
+                 wm_eval, agent_eval, buffer_device, *, use_decom_wm, rng, autocast, compile_):
         self.env = env
         self.wm = wm
         self.agent = agent
@@ -33,13 +33,18 @@ class Trainer:
         # Initialize the replay buffer
         start_o, _ = env.reset(seed=seed)
         replay_buffer = replay.ReplayBuffer(
-            env.observation_space, agent.stacked_action_space, env_steps, start_o, device=buffer_device)
+            env.observation_space, agent.stacked_action_space, env_steps, start_o, use_cost=use_decom_wm, device=buffer_device)
         self.replay_buffer = replay_buffer
 
         # Initialize the world model and agent trainers
-        self.wm_trainer = WorldModelTrainer(
-            wm, replay_buffer, **wm_trainer, init_steps=init_steps, eval_mode=wm_eval,
-            total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_)
+        if not use_decom_wm:
+            self.wm_trainer = WorldModelTrainer(
+                wm, replay_buffer, **wm_trainer, init_steps=init_steps, eval_mode=wm_eval,
+                total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_)
+        else:
+            self.wm_trainer = WorldModelDecomposedTrainer(
+                wm, replay_buffer, **wm_trainer, init_steps=init_steps, eval_mode=wm_eval,
+                total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_)
 
         self.agent_trainer = AgentTrainer(
             game, agent, wm, replay_buffer, **agent_trainer,
@@ -76,14 +81,18 @@ class Trainer:
     def _env_step(self, a, stacked_a):
         env = self.env
         action = a.detach().cpu().numpy()
-        if isinstance(env.action_space, gym.spaces.MultiDiscrete):
+        if isinstance(env.action_space, gym.spaces.Discrete) or isinstance(env.action_space, gym.spaces.MultiDiscrete):
             action = action.item()
-        next_o, next_r, next_term, next_trunc, _ = env.step(action)
+        else:
+            action = action.squeeze(0)
+        next_o, next_r, next_term, next_trunc, info = env.step(action)
+        next_c = info.get('cost', None)
         cont_o = next_o
         if next_term or next_trunc:
             cont_o, _ = env.reset()
-        next_r, next_term, next_trunc, next_o = \
-            self.replay_buffer.step(stacked_a, next_o, next_r, next_term, next_trunc, cont_o)
+        
+        next_r, next_c, next_term, next_trunc, next_o = \
+            self.replay_buffer.step(stacked_a, next_o, next_r, next_c, next_term, next_trunc, cont_o)
         next_term, next_trunc = next_term.to(self.wm.device), next_trunc.to(self.wm.device)
         self.cont_mask = utils.get_mask(~(next_term | next_trunc))
 

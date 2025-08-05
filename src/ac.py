@@ -243,7 +243,7 @@ class ActorCriticTrainer:
         self.critic_optimizer.step(critic_loss, batch_size, it)
         return metrics
 
-    def train(self, it, xs, final_x, as_, next_rs, next_terms):
+    def train(self, it, xs, final_x, as_, next_rs, next_cs, next_terms):
         policy = self.policy
         return_norm = self.return_norm
         critic = policy.critic
