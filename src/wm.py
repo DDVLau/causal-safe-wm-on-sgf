@@ -72,7 +72,7 @@ class WorldModelDecomposed(nn.Module):
         if cost_predictor is not None:
             self.cost_predictor = compile_(nets.ScalarMLP(2 * y_dim['cost'] + a_dim, **cost_predictor, device=device)) # y_reward only
 
-        self.mist_estimator = self._init_mist_estimator(y_dim, a_dim, mist_hidden_dim)
+        self.mist_estimator = compile_(self._init_mist_estimator(y_dim, a_dim, mist_hidden_dim, device=device))
 
         self.contrastive = contrastive
         self.sim_coef = sim_coef
@@ -719,7 +719,7 @@ class WorldModelDecomposedTrainer:
             video.append(torch.zeros_like(video[-1]))  # append empty frame to visualize ends
             video = torch.stack(video, 0)
             video = (video * 255.0).byte().cpu().numpy()
-            metrics['dream'] = wandb.Video(video, fps=10)
+            metrics['dream'] = wandb.Video(video, fps=10, format='gif')
 
         return metrics
     
@@ -917,6 +917,6 @@ class WorldModelTrainer:
             video.append(torch.zeros_like(video[-1]))  # append empty frame to visualize ends
             video = torch.stack(video, 0)
             video = (video * 255.0).byte().cpu().numpy()
-            metrics['dream'] = wandb.Video(video, fps=10)
+            metrics['dream'] = wandb.Video(video, fps=10, format='gif')
 
         return metrics
