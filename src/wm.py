@@ -84,13 +84,13 @@ class WorldModelDecomposed(nn.Module):
         self.mi_coef = mi_coef
         self.device = device
 
-    def _init_mist_estimator(self, y_dim, a_dim, mist_hidden_dim):
+    def _init_mist_estimator(self, y_dim, a_dim, mist_hidden_dim, device=None):
         """Initialize the MIST estimator."""
         estimators = nn.ModuleDict()
-        estimators['reward'] = CLUB(x_dim=2 * y_dim['reward'] + a_dim, y_dim=1, hidden_size=mist_hidden_dim)
-        estimators['reward_bar'] = CLUB(x_dim=2 * y_dim['reward'] + a_dim, y_dim=1, hidden_size=mist_hidden_dim)
-        estimators['cost'] = CLUB(x_dim=2 * y_dim['cost'] + a_dim, y_dim=1, hidden_size=mist_hidden_dim)
-        estimators['cost_bar'] = CLUB(x_dim=2 * y_dim['cost'] + a_dim, y_dim=1, hidden_size=mist_hidden_dim)
+        estimators['reward'] = CLUB(x_dim=2 * y_dim['reward'] + a_dim, y_dim=1, hidden_size=mist_hidden_dim).to(device)
+        estimators['reward_bar'] = CLUB(x_dim=2 * y_dim['reward'] + a_dim, y_dim=1, hidden_size=mist_hidden_dim).to(device)
+        estimators['cost'] = CLUB(x_dim=2 * y_dim['cost'] + a_dim, y_dim=1, hidden_size=mist_hidden_dim).to(device)
+        estimators['cost_bar'] = CLUB(x_dim=2 * y_dim['cost'] + a_dim, y_dim=1, hidden_size=mist_hidden_dim).to(device)
         return estimators
 
     def representation_modules(self):
