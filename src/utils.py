@@ -491,6 +491,7 @@ class EpisodeCollector:
             if num_parallel == 1:
                 o, _ = vector_env.reset(seed=seed + num_done)
                 agg = reset_fn(np.array([True]), o)
+                agg['episode_cost'] = np.array([0.0])
                 state = None
                 done = False
                 just_done = np.array([False])
@@ -501,6 +502,7 @@ class EpisodeCollector:
                     next_o, next_r, next_term, next_trunc, info = vector_env.step(a.squeeze(0))
                     done = next_term or next_trunc
                     agg['episode_reward'][0] += next_r
+                    agg['episode_cost'][0] += info.get('cost', 0)
                     agg['episode_length'][0] += 1
                     just_done = np.array([done])
                     o = next_o

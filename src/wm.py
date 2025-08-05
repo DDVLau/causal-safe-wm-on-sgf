@@ -8,7 +8,7 @@ from torchvision.utils import make_grid
 
 import nets
 import utils
-from mist import CLUB
+from mist import CLUBSample as CLUB
 
 
 class WorldModelDecomposed(nn.Module):
@@ -67,10 +67,10 @@ class WorldModelDecomposed(nn.Module):
         self.projector = compile_(nets.VectorMLP(total_y_dim, z_dim, **projector, device=device)) # y_reward + y_cost
         self.predictor = compile_(nets.VectorMLP(z_dim + a_dim, z_dim, **predictor, device=device))
         self.transition_predictor = compile_(nets.VectorMLP(total_y_dim + a_dim, total_y_dim, **transition_predictor, device=device))
-        self.reward_predictor = compile_(nets.ScalarMLP(2 * y_dim['reward'] + a_dim, **reward_predictor, device=device)) # y_cost only
+        self.reward_predictor = compile_(nets.ScalarMLP(4 * y_dim['reward'] + a_dim, **reward_predictor, device=device)) # y_cost only
         self.terminal_predictor = compile_(nets.ScalarMLP(2 * total_y_dim + a_dim, **terminal_predictor, device=device)) # y_reward + y_cost
         if cost_predictor is not None:
-            self.cost_predictor = compile_(nets.ScalarMLP(2 * y_dim['cost'] + a_dim, **cost_predictor, device=device)) # y_reward only
+            self.cost_predictor = compile_(nets.ScalarMLP(4 * y_dim['cost'] + a_dim, **cost_predictor, device=device)) # y_reward only
 
         self.mist_estimator = compile_(self._init_mist_estimator(y_dim, a_dim, mist_hidden_dim, device=device))
 
@@ -162,8 +162,8 @@ class WorldModelDecomposed(nn.Module):
             next_y_r, next_y_r_bar, next_y_c, next_y_c_bar = torch.split(next_y, [self.y_dim['reward'], self.y_dim['reward'], self.y_dim['cost'], self.y_dim['cost']], dim=-1)
 
             inp = torch.cat([y, flat_a, next_y], -1)
-            inp_r = torch.cat([y_r, flat_a, next_y_r], -1)
-            inp_c = torch.cat([y_c, flat_a, next_y_c], -1)
+            inp_r = torch.cat([y_r, y_r_bar, flat_a, next_y_r, next_y_r_bar], -1)
+            inp_c = torch.cat([y_c, y_c_bar, flat_a, next_y_c, next_y_c_bar], -1)
 
             inp = torch.cat([y, flat_a, next_y], -1)
             next_r = self.reward_predictor(inp_r)
@@ -207,8 +207,8 @@ class WorldModelDecomposed(nn.Module):
         next_yt_r, next_yt_r_bar, next_yt_c, next_yt_c_bar = torch.split(next_yt, [self.y_dim['reward'], self.y_dim['reward'], self.y_dim['cost'], self.y_dim['cost']], dim=-1)
 
         inp = torch.cat([yt, flat_a, next_yt], -1)
-        inp_reward = torch.cat([yt_r, flat_a, next_yt_r], -1)
-        inp_cost = torch.cat([yt_c, flat_a, next_yt_c], -1)
+        inp_reward = torch.cat([yt_r, yt_r_bar, flat_a, next_yt_r, yt_c_bar], -1)
+        inp_cost = torch.cat([yt_c, next_yt_r_bar, flat_a, next_yt_c, next_yt_c_bar], -1)
         reward_stats = self.reward_predictor.get_stats(inp_reward, full_precision=True)
         reward_loss = self.reward_predictor.loss(reward_stats, next_r)
         cost_stats = self.cost_predictor.get_stats(inp_cost, full_precision=True)
