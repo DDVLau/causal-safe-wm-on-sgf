@@ -21,7 +21,7 @@ def seed_everything(seed, deterministic_torch=False):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.deterministic = True
     torch.use_deterministic_algorithms(deterministic_torch)
     np.random.seed(seed)
     return random_generator(seed)

@@ -64,21 +64,18 @@ class ReplayBuffer:
         """Get the data at the given indices."""
 
         if len(keys) == 0:
-            if self.use_cost:
-                keys = ('o', 'a', 'next_r', 'next_c', 'next_term', 'next_trunc', 'next_o')
-            else:
-                keys = ('o', 'a', 'next_r', 'next_term', 'next_trunc', 'next_o')
+            keys = ("o", "a", "next_r", "next_c", "next_term", "next_trunc", "next_o") if self.use_cost else ("o", "a", "next_r", "next_term", "next_trunc", "next_o")
 
         tensors = {
-            'o': self.observations,
-            'a': self.actions,
-            'next_r': self.next_rewards,
-            'next_term': self.next_terms,
-            'next_trunc': self.next_truncs,
-            'next_o': self.next_observations,
+            "o": self.observations,
+            "a": self.actions,
+            "next_r": self.next_rewards,
+            "next_term": self.next_terms,
+            "next_trunc": self.next_truncs,
+            "next_o": self.next_observations,
         }
         if self.use_cost:
-            tensors['next_c'] = self.next_costs
+            tensors["next_c"] = self.next_costs
 
         tensors = tuple(tensors[key] for key in keys)
 
@@ -115,7 +112,7 @@ class ReplayBuffer:
         """Add a transition to the buffer."""
 
         if self.len >= self.capacity:
-            raise ValueError('Buffer is full')
+            raise ValueError("Buffer is full")
 
         i = self.len
         next_o = torch.as_tensor(np.array(next_o), dtype=self.observations.dtype).to(device=self.observations.device, non_blocking=True)
@@ -159,9 +156,9 @@ class ReplayBuffer:
         """Get statistics about the buffer."""
         episode_rewards = np.array(self.episode_rewards)
         stats = {
-            'buffer_size': self.len,
-            'buffer_episodes': len(episode_rewards),
-            'buffer_max_episode_reward': np.max(episode_rewards),
-            'buffer_total_reward': np.sum(episode_rewards),
+            "buffer_size": self.len,
+            "buffer_episodes": len(episode_rewards),
+            "buffer_max_episode_reward": np.max(episode_rewards),
+            "buffer_total_reward": np.sum(episode_rewards),
         }
         return stats

@@ -11,6 +11,7 @@ dependencies = [
     "ruamel-yaml>=0.18.14",
     "wandb>=0.21.0",
     "moviepy>=2.2.1",
+    "matplotlib>=3.10.3",
 ]
 [dependency-groups]
 safetygym = [
@@ -57,3 +58,7 @@ explicit = true
 name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
+
+[tool.ruff]
+# Allow lines to be as long as 120.
+line-length = 180
