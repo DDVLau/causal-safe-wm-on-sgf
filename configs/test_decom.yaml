@@ -130,6 +130,7 @@ trainer:
   env_epsilon: 0.01
   env_temperature: 1.0
   wm_every: 2
+  cdm_every: 2 # debugging
   agent_every: 2
   log_every: 100
   eval_every: 2500
@@ -197,8 +198,27 @@ trainer:
         weight_decay: 0.0
         clip: 1000.0
 
+  cdm_trainer:
+    alpha: 1.0
+    beta: 1.0
+    constrain_coef: 0.1
+    C: 1.0
+    batch_size: 512
+    num_epochs: 3
+
+    cdm_optimizer:
+      name: cdm
+      type: adamw
+      base_lr: 1e-4
+      end_lr: 1e-4
+      warmup_its: 5000
+      betas: [ 0.9, 0.999 ]
+      eps: 1e-8
+      weight_decay: 0.001
+      clip: 10.0
+
   agent_trainer:
-    batch_size: 3072
+    batch_size: 2048 # debugging
     horizon: 10
 
     eval_env:
@@ -211,7 +231,7 @@ trainer:
     eval_num_parallel: 1
     eval_temperature: 0.5
     eval_epsilon: 0.0
-    eval_episodes: 20
+    eval_episodes: 20 # debugging
     final_eval_episodes: 100
 
     policy_trainer:

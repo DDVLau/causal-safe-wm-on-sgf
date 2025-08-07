@@ -12,17 +12,18 @@ import utils
 
 @dataclass
 class AgentState:
-    """ State of the agent, currently only contains the action stack. """
+    """State of the agent, currently only contains the action stack."""
+
     action_stack: Optional[Any]
 
     def map(self, fn):
-        """ Apply a function to each element of the state. """
+        """Apply a function to each element of the state."""
         action_stack = utils.map_structure(fn, self.action_stack)
         return AgentState(action_stack)
 
 
 class Agent(nn.Module):
-    """ Wrapper for a policy that handles an agent's state. """
+    """Wrapper for a policy that handles an agent's state."""
 
     def __init__(self, policy, single_action_space, action_stack):
         super().__init__()
@@ -53,13 +54,22 @@ class Agent(nn.Module):
 
     def act_randomly(self, state, cont_mask, rng):
         batch_size = cont_mask.shape[0]
-        if hasattr(self.single_action_space, 'n'):
+        if hasattr(self.single_action_space, "n"):
             a = torch.as_tensor(
-                rng.choice(self.single_action_space.n, batch_size), dtype=torch.long, device=cont_mask.device)
+                rng.choice(self.single_action_space.n, batch_size),
+                dtype=torch.long,
+                device=cont_mask.device,
+            )
         else:
             a = torch.as_tensor(
-                rng.uniform(self.single_action_space.low, self.single_action_space.high, (batch_size, *self.single_action_space.shape)),
-                dtype=torch.float32, device=cont_mask.device)
+                rng.uniform(
+                    self.single_action_space.low,
+                    self.single_action_space.high,
+                    (batch_size, *self.single_action_space.shape),
+                ),
+                dtype=torch.float32,
+                device=cont_mask.device,
+            )
             a = a.view(batch_size, *self.single_action_space.shape)
         next_state, stacked_a = self._advance_state(state, cont_mask, a)
         return a, stacked_a, next_state
@@ -71,13 +81,31 @@ class Agent(nn.Module):
 
 
 class AgentTrainer:
-    """ Trainer for an agent. """
+    """Trainer for an agent."""
 
-    def __init__(self, game, agent, world_model, replay_buffer, batch_size, horizon, policy_trainer,
-                 eval_env, eval_num_parallel, eval_temperature, eval_epsilon, eval_episodes,
-                 final_eval_episodes, eval_mode, *, total_its, rng, autocast, compile_=None):
-
-        if eval_mode not in ('none', 'final', 'all'):
+    def __init__(
+        self,
+        game,
+        agent,
+        world_model,
+        replay_buffer,
+        batch_size,
+        horizon,
+        policy_trainer,
+        eval_env,
+        eval_num_parallel,
+        eval_temperature,
+        eval_epsilon,
+        eval_episodes,
+        final_eval_episodes,
+        eval_mode,
+        *,
+        total_its,
+        rng,
+        autocast,
+        compile_=None,
+    ):
+        if eval_mode not in ("none", "final", "all"):
             raise ValueError('Agent eval_mode must be one of "none", "final", "all"')
 
         self.agent = agent
@@ -93,14 +121,20 @@ class AgentTrainer:
         self.rng = rng
         self.autocast = autocast
 
-        if eval_mode in ('all', 'final'):
+        if eval_mode in ("all", "final"):
             eval_env_id, eval_env_wrappers, eval_env_kwargs = envs.make_env(game, make=False, env_config=eval_env)
             self.eval_collector = utils.EpisodeCollector(eval_env_id, eval_env_wrappers, eval_env_kwargs, eval_num_parallel)
 
-        self.policy_trainer = agent.policy.create_trainer(policy_trainer, total_its=total_its, rng=rng, autocast=autocast, compile_=compile_)
+        self.policy_trainer = agent.policy.create_trainer(
+            policy_trainer,
+            total_its=total_its,
+            rng=rng,
+            autocast=autocast,
+            compile_=compile_,
+        )
 
     def train(self, it, start_y=None):
-        """ Train the agent for one iteration. Optionally provide starting states. """
+        """Train the agent for one iteration. Optionally provide starting states."""
 
         agent = self.agent
         wm = self.world_model
@@ -115,14 +149,14 @@ class AgentTrainer:
                 if start_y is None:
                     # sample start from replay buffer
                     idx = buffer.sample_idx(batch_size, self.rng)
-                    o = buffer.get(idx, 'next_o')[0]
+                    o = buffer.get(idx, "next_o")[0]
                     o = o.to(wm.device)
                     start_y = wm.encode(o)
                 elif start_y.shape[0] >= batch_size:
                     start_y = start_y[:batch_size]
                 else:
                     idx = buffer.sample_idx(batch_size - start_y.shape[0], self.rng)
-                    remaining_o = buffer.get(idx, 'next_o')[0]
+                    remaining_o = buffer.get(idx, "next_o")[0]
                     remaining_o = remaining_o.to(wm.device)
                     remaining_y = wm.encode(remaining_o)
                     start_y = torch.cat([start_y, remaining_y], 0)
@@ -146,9 +180,9 @@ class AgentTrainer:
 
     @torch.no_grad()
     def evaluate(self, is_final, seed):
-        """ Evaluate the agent. """
+        """Evaluate the agent."""
 
-        if self.eval_mode not in ('all', 'final') or (self.eval_mode == 'final' and not is_final):
+        if self.eval_mode not in ("all", "final") or (self.eval_mode == "final" and not is_final):
             return {}
 
         agent = self.agent
@@ -184,11 +218,123 @@ class AgentTrainer:
         stats = self.eval_collector.collect_episode_stats(seed, num_eps, policy)
 
         def aggregate(xs, key):
-            return {key: np.mean(xs), f'{key}_std': np.std(xs), f'{key}_min': np.min(xs), f'{key}_max': np.max(xs)}
+            return {
+                key: np.mean(xs),
+                f"{key}_std": np.std(xs),
+                f"{key}_min": np.min(xs),
+                f"{key}_max": np.max(xs),
+            }
 
-        metrics = {**aggregate(stats['episode_reward'], 'episode_reward'),
-                   **aggregate(stats['episode_length'], 'episode_length')}
+        metrics = {
+            **aggregate(stats["episode_reward"], "episode_reward"),
+            **aggregate(stats["episode_length"], "episode_length"),
+        }
         return metrics
 
     def close(self):
         self.eval_collector.close()
+
+
+class AgentExplorationTrainer(AgentTrainer):
+    """Trainer for an agent that explores the environment."""
+
+    def __init__(
+        self,
+        game,
+        agent,
+        world_model,
+        causal_dynamics_model,
+        replay_buffer,
+        batch_size,
+        horizon,
+        policy_trainer,
+        eval_env,
+        eval_num_parallel,
+        eval_temperature,
+        eval_epsilon,
+        eval_episodes,
+        final_eval_episodes,
+        eval_mode,
+        *,
+        total_its,
+        rng,
+        autocast,
+        compile_=None,
+    ):
+        super().__init__(
+            game,
+            agent,
+            world_model,
+            replay_buffer,
+            batch_size,
+            horizon,
+            policy_trainer,
+            eval_env,
+            eval_num_parallel,
+            eval_temperature,
+            eval_epsilon,
+            eval_episodes,
+            final_eval_episodes,
+            eval_mode=eval_mode,
+            total_its=total_its,
+            rng=rng,
+            autocast=autocast,
+            compile_=compile_,
+        )
+        self.causal_dynamics_model = causal_dynamics_model
+
+    def train(self, it, start_y=None):
+        """Train the agent for one iteration. Optionally provide starting states."""
+
+        agent = self.agent
+        wm = self.world_model
+        cdm = self.causal_dynamics_model
+        buffer = self.replay_buffer
+        batch_size = self.batch_size
+
+        # Synthesize data from the world model
+        wm.eval()
+        agent.eval()
+        with self.autocast():
+            with torch.no_grad():
+                if start_y is None:
+                    # sample start from replay buffer
+                    idx = buffer.sample_idx(batch_size, self.rng)
+                    o = buffer.get(idx, "next_o")[0]
+                    o = o.to(wm.device)
+                    start_y = wm.encode(o)
+                elif start_y.shape[0] >= batch_size:
+                    start_y = start_y[:batch_size]
+                else:
+                    idx = buffer.sample_idx(batch_size - start_y.shape[0], self.rng)
+                    remaining_o = buffer.get(idx, "next_o")[0]
+                    remaining_o = remaining_o.to(wm.device)
+                    remaining_y = wm.encode(remaining_o)
+                    start_y = torch.cat([start_y, remaining_y], 0)
+
+                outs = wm.imagine(agent, self.horizon, start_y)
+                if len(outs) == 6:
+                    ys, as_, flat_as, next_ys, next_rs, next_terms = outs
+                    next_cs = None
+                elif len(outs) == 7:
+                    ys, as_, flat_as, next_ys, next_rs, next_cs, next_terms = outs
+
+                curiosity_r, curiosity_c = [], []
+                for i in range(len(ys)):
+                    curiosity = cdm.curiosity(ys[i], as_[i], flat_as[i].reshape(ys[i].shape[0], -1), wm)
+                    curiosity_r.append(curiosity[0])
+                    curiosity_c.append(curiosity[1])
+
+                ys = torch.stack(ys, 0)
+                as_ = torch.stack(as_, 0)
+                next_terms = torch.stack(next_terms, 0)
+                next_rs = torch.stack(next_rs, 0)
+                next_cs = torch.stack(next_cs, 0) if next_cs is not None else None
+                curiosity_r = torch.stack(curiosity_r, 0)
+                curiosity_c = torch.stack(curiosity_c, 0)
+
+                final_reward = next_rs + curiosity_r + curiosity_c
+
+        # Train the policy on the synthesized data
+        metrics = self.policy_trainer.train(it, ys, next_ys[-1], as_, final_reward, next_cs, next_terms)
+        return metrics
