@@ -75,8 +75,9 @@ def main():
     agent = Agent(policy, env.action_space, config.action_stack)
 
     # Exploration agent
-    explore_agent = Agent(policy, env.action_space, config.action_stack)
-    explore_agent.load_state_dict(agent.state_dict().copy())
+    explore_policy = ActorCriticPolicy(y_dim, a_dim, config.policy["actor"], config.policy["critic"], compile_=compile_, device=device)
+    explore_policy.load_state_dict(policy.state_dict().copy())
+    explore_agent = Agent(explore_policy, env.action_space, config.action_stack)
 
     wm = (
         WorldModel(env.observation_space, agent.stacked_action_space, **config.wm, compile_=compile_, device=device)

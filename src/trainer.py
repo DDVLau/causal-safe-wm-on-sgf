@@ -213,6 +213,7 @@ class TrainerCausalWM:
             metrics.update({f"wm/{k}": v for k, v in self.wm_agg.aggregate().items()})
             metrics.update({f"cdm/{k}": v for k, v in self.cdm_agg.aggregate().items()})
             metrics.update({f"agent/{k}": v for k, v in self.agent_agg.aggregate().items()})
+            metrics.update({f"explore_agent/{k}": v for k, v in self.explore_agent_agg.aggregate().items()})
             self.last_log = it
 
         if is_first or is_final or (it - self.last_eval >= self.eval_every):
