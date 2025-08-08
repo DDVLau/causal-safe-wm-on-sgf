@@ -53,7 +53,7 @@ class PDAGLearning(nn.Module):
 
         return dict(feat=feat, effects=effects, treatment_feat=treatment_feat, treatment_effects=treatment_effects, propensity=propensity)
 
-    def curiosity(self, y, a, flat_a, wm):
+    def curiosity(self, y, a, flat_a, wm, eps=1e-3):
         """
         Multi-method curiosity implementation with control variable.
 
@@ -61,20 +61,21 @@ class PDAGLearning(nn.Module):
         - "prediction_error": Original prediction error method
         - "mc_dropout": Monte Carlo dropout uncertainty
         """
-        reward_predictor = wm.reward_predictor
-        cost_predictor = wm.cost_predictor
+        # reward_predictor = wm.reward_predictor
+        # cost_predictor = wm.cost_predictor
 
         inp = torch.cat([y, flat_a], -1)
         next_y = y + wm.transition_predictor(inp)
         inp_ips = torch.cat([y, a, next_y], -1)
-        _, inp_r, inp_c = wm._get_predictor_inputs(y, flat_a, next_y)
-        true_r = reward_predictor(inp_r)
-        true_c = cost_predictor(inp_c)
+        # _, inp_r, inp_c = wm._get_predictor_inputs(y, flat_a, next_y)
+        # true_r = reward_predictor(inp_r)
+        # true_c = cost_predictor(inp_c)
 
         if self.curiosity_method == "prediction_error":
-            # Original method: prediction error
             pred = self.ips_model(inp_ips)
-            return (true_r - pred[:, 0], true_c - pred[:, 1])
+            reward_scaled = torch.where(torch.abs(pred[:, 0]) > eps, torch.ones_like(pred[:, 0]), pred[:, 0])
+            cost_scaled = torch.where(torch.abs(pred[:, 1]) > eps, torch.ones_like(pred[:, 1]), pred[:, 1])
+            return (reward_scaled, cost_scaled)
 
         elif self.curiosity_method == "mc_dropout":
             # Monte Carlo dropout uncertainty
