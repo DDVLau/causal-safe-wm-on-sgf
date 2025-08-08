@@ -84,18 +84,19 @@ class PDAGTrainer:
         return T * Y / weight - (1 - T) * Y / (1 - weight)
 
     def train(self, yt, wm, agent, explore_agent, it) -> Dict[str, float]:
+        device = yt.device
         # propensity should come from interventional action
         outputs = self.cdm.get_treatment(yt, wm, agent, explore_agent)
         X = torch.cat([outputs["feat"], outputs["treatment_feat"]], dim=0)
         Y_r = torch.cat([outputs["effects"]["reward"], outputs["treatment_effects"]["reward"]], dim=0)
         Y_c = torch.cat([outputs["effects"]["cost"], outputs["treatment_effects"]["cost"]], dim=0)
         Y = torch.stack([Y_r, Y_c], dim=-1)
-        propensity = outputs["propensity"]
+        propensity = outputs["propensity"].to(device)
 
         num_sample = X.shape[0]
         batch_size = self.batch_size
         # T: half zeros, half ones
-        T = torch.cat([torch.zeros(num_sample // 2, 1), torch.ones(num_sample - num_sample // 2, 1)], dim=0)
+        T = torch.cat([torch.zeros(num_sample // 2, 1), torch.ones(num_sample - num_sample // 2, 1)], dim=0).to(device)
         metrics = {}
 
         with self.autocast():
