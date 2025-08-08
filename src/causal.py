@@ -9,15 +9,24 @@ from torch import nn
 
 
 class PDAGLearning(nn.Module):
-    def __init__(self, observation_space, single_action_space, y_dim, *, compile_, device=None):
+    def __init__(self, observation_space, single_action_space, y_dim, *, compile_, device=None, curiosity_method="prediction_error", ensemble_size=5, mc_samples=10):
         super().__init__()
-        a_dim = single_action_space.shape[0]
-        latent_nodes = 2 * y_dim + a_dim
+        self.y_dim = y_dim
+        self.a_dim = single_action_space.shape[0]
+        latent_nodes = 2 * y_dim + self.a_dim
+        self.curiosity_method = curiosity_method
+        self.mc_samples = mc_samples
+        self.device = device
 
-        # LR model -> reward and cost
-        self.lr_model = compile_(nn.Sequential(torch.nn.Linear(latent_nodes, 256), torch.nn.ReLU(), torch.nn.Linear(256, 2)).to(device))
         # IPS model -> reward and cost
         self.ips_model = compile_(nn.Sequential(torch.nn.Linear(latent_nodes, 256), torch.nn.ReLU(), torch.nn.Linear(256, 2)).to(device))
+
+        # Add dropout for MC-Dropout method
+        if curiosity_method == "mc_dropout":
+            for module in self.ips_model.modules():
+                if isinstance(module, torch.nn.Linear):
+                    module.register_forward_hook(lambda module, input, output: torch.nn.functional.dropout(output, p=0.1, training=True))
+
         # Propensity prediction model
         self.propensity_model = compile_(nn.Sequential(torch.nn.Linear(latent_nodes, 256), torch.nn.ReLU(), torch.nn.Linear(256, 1)).to(device))
 
@@ -45,21 +54,41 @@ class PDAGLearning(nn.Module):
         return dict(feat=feat, effects=effects, treatment_feat=treatment_feat, treatment_effects=treatment_effects, propensity=propensity)
 
     def curiosity(self, y, a, flat_a, wm):
-        """"""
+        """
+        Multi-method curiosity implementation with control variable.
+
+        Methods:
+        - "prediction_error": Original prediction error method
+        - "mc_dropout": Monte Carlo dropout uncertainty
+        """
         reward_predictor = wm.reward_predictor
         cost_predictor = wm.cost_predictor
 
         inp = torch.cat([y, flat_a], -1)
         next_y = y + wm.transition_predictor(inp)
-
-        # get effect (r, c)
         inp_ips = torch.cat([y, a, next_y], -1)
-        pred = self.ips_model(inp_ips)
         _, inp_r, inp_c = wm._get_predictor_inputs(y, flat_a, next_y)
-
         true_r = reward_predictor(inp_r)
         true_c = cost_predictor(inp_c)
-        return (true_r - pred[:, 0], true_c - pred[:, 1])
+
+        if self.curiosity_method == "prediction_error":
+            # Original method: prediction error
+            pred = self.ips_model(inp_ips)
+            return (true_r - pred[:, 0], true_c - pred[:, 1])
+
+        elif self.curiosity_method == "mc_dropout":
+            # Monte Carlo dropout uncertainty
+            self.ips_model.train()  # Enable dropout
+            predictions = []
+            for _ in range(self.mc_samples):
+                predictions.append(self.ips_model(inp_ips))
+            self.ips_model.eval()  # Restore eval mode
+            pred_stack = torch.stack(predictions)
+            uncertainty = torch.var(pred_stack, dim=0)
+            return uncertainty[:, 0], uncertainty[:, 1]
+
+        else:
+            raise ValueError(f"Unknown curiosity method: {self.curiosity_method}")
 
 
 class PDAGTrainer:
@@ -67,7 +96,6 @@ class PDAGTrainer:
 
     def __init__(self, cdm, alpha, beta, C, constrain_coef, batch_size, num_epochs, cdm_optimizer, *, total_its, rng, autocast, compile_):
         self.cdm = cdm
-        self.alpha = alpha
         self.beta = beta
         self.C = C
         self.constrain_coef = constrain_coef
@@ -107,17 +135,17 @@ class PDAGTrainer:
                 sub_t = torch.Tensor(T[perm_idx])
                 sub_propensity = torch.Tensor(propensity[perm_idx, :])
 
-                pred = self.cdm.lr_model(sub_x).reshape(batch_size, -1)
+                # pred = self.cdm.lr_model(sub_x).reshape(batch_size, -1)
                 pred_cate = self.cdm.ips_model(sub_x).reshape(batch_size, -1)
-                xent_loss = nn.MSELoss()(pred, sub_y)
 
                 # TODO: C should be prediction of normalised reward/cost
                 C = self.C
                 CATE_bound = torch.max(torch.sum(torch.clip(-C - pred_cate, 0, 10) + torch.clip(-C + pred_cate, 0, 10), dim=0))
                 # TODO: this should be changed according to new sub_t and sub_propensity
-                CATE_y = self.ips_update_y(sub_t.reshape(batch_size, -1), pred, sub_propensity.reshape(batch_size, -1))
+                # removing lr_model: pred -> sub_y
+                CATE_y = self.ips_update_y(sub_t.reshape(batch_size, -1), sub_y, sub_propensity.reshape(batch_size, -1))
 
-                loss = self.beta * torch.mean((pred_cate - CATE_y) ** 2) + self.alpha * xent_loss + self.constrain_coef * CATE_bound
+                loss = self.beta * torch.mean((pred_cate - CATE_y) ** 2) + self.constrain_coef * CATE_bound
 
                 grad_norm_dict = self.cdm_optimizer.step(loss, batch_size, it)
 
@@ -130,6 +158,13 @@ class PDAGTrainer:
 
         for k in metrics:
             metrics[k] = torch.tensor(metrics[k]).mean().item()
+
+        feat_stats = torch.split((outputs["feat"] - outputs["treatment_feat"]).detach().cpu().mean(0), [self.cdm.y_dim, self.cdm.a_dim, self.cdm.y_dim])
+
+        metrics["diff_feat_a"] = feat_stats[1].mean().item()
+        metrics["diff_feat_next_y"] = feat_stats[2].mean().item()
+        metrics["diff_eff_r"] = (outputs["effects"]["reward"] - outputs["treatment_effects"]["reward"]).detach().cpu().mean().item()
+        metrics["diff_eff_c"] = (outputs["effects"]["cost"] - outputs["treatment_effects"]["cost"]).detach().cpu().mean().item()
 
         return metrics
 

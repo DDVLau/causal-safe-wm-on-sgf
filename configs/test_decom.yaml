@@ -130,7 +130,7 @@ trainer:
   env_epsilon: 0.01
   env_temperature: 1.0
   wm_every: 2
-  cdm_every: 2 # debugging
+  cdm_every: 10 # debugging
   agent_every: 2
   log_every: 100
   eval_every: 2500
