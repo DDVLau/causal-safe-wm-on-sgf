@@ -199,7 +199,7 @@ trainer:
         clip: 1000.0
 
   cdm_trainer:
-    alpha: 1.0
+    propensity_coef: 1.0
     beta: 1.0
     constrain_coef: 0.1
     C: 1.0

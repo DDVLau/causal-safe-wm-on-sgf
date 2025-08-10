@@ -1,10 +1,7 @@
-import time
 import torch
-import gymnasium as gym
 import nets
-import utils
 
-from typing import Tuple, List, Dict
+from typing import Dict
 from torch import nn
 
 
@@ -19,16 +16,16 @@ class PDAGLearning(nn.Module):
         self.device = device
 
         # IPS model -> reward and cost
-        self.ips_model = compile_(nn.Sequential(torch.nn.Linear(latent_nodes, 256), torch.nn.ReLU(), torch.nn.Linear(256, 2)).to(device))
+        self.ips_model = compile_(nn.Sequential(nn.Linear(latent_nodes, 256), nn.ReLU(), nn.Linear(256, 2)).to(device))
 
         # Add dropout for MC-Dropout method
         if curiosity_method == "mc_dropout":
             for module in self.ips_model.modules():
-                if isinstance(module, torch.nn.Linear):
-                    module.register_forward_hook(lambda module, input, output: torch.nn.functional.dropout(output, p=0.1, training=True))
+                if isinstance(module, nn.Linear):
+                    module.register_forward_hook(lambda module, input, output: nn.functional.dropout(output, p=0.1, training=True))
 
-        # Propensity prediction model
-        self.propensity_model = compile_(nn.Sequential(torch.nn.Linear(latent_nodes, 256), torch.nn.ReLU(), torch.nn.Linear(256, 1)).to(device))
+        # Propensity model
+        self.propensity_model = compile_(nn.Sequential(nn.Linear(latent_nodes, 256), nn.ReLU(), nn.Linear(256, 1), nn.Sigmoid()).to(device))
 
     def get_treatment(self, yt, wm, agent, explore_agent) -> Dict[str, torch.Tensor]:
         """ """
@@ -49,7 +46,9 @@ class PDAGLearning(nn.Module):
 
         effects, feat = get_effects(wm, agent, yt)
         treatment_effects, treatment_feat = get_effects(wm, explore_agent, yt)
-        propensity = 0.5 * torch.ones((2 * yt.shape[0], 1), device=yt.device)
+        with torch.no_grad():
+            propensity = torch.cat([self.propensity_model(feat), self.propensity_model(treatment_feat)], dim=0)
+            propensity = torch.clip(propensity, min=0.2, max=0.8)
 
         return dict(feat=feat, effects=effects, treatment_feat=treatment_feat, treatment_effects=treatment_effects, propensity=propensity)
 
@@ -67,9 +66,6 @@ class PDAGLearning(nn.Module):
         inp = torch.cat([y, flat_a], -1)
         next_y = y + wm.transition_predictor(inp)
         inp_ips = torch.cat([y, a, next_y], -1)
-        # _, inp_r, inp_c = wm._get_predictor_inputs(y, flat_a, next_y)
-        # true_r = reward_predictor(inp_r)
-        # true_c = cost_predictor(inp_c)
 
         if self.curiosity_method == "prediction_error":
             pred = self.ips_model(inp_ips)
@@ -95,8 +91,9 @@ class PDAGLearning(nn.Module):
 class PDAGTrainer:
     """Trainer for a PDAG model."""
 
-    def __init__(self, cdm, alpha, beta, C, constrain_coef, batch_size, num_epochs, cdm_optimizer, *, total_its, rng, autocast, compile_):
+    def __init__(self, cdm, propensity_coef, beta, C, constrain_coef, batch_size, num_epochs, cdm_optimizer, *, total_its, rng, autocast, compile_):
         self.cdm = cdm
+        self.propensity_coef = propensity_coef
         self.beta = beta
         self.C = C
         self.constrain_coef = constrain_coef
@@ -126,15 +123,20 @@ class PDAGTrainer:
         batch_size = self.batch_size
         # T: half zeros, half ones
         T = torch.cat([torch.zeros(num_sample // 2, 1), torch.ones(num_sample - num_sample // 2, 1)], dim=0).to(device)
+
         metrics = {}
 
         with self.autocast():
             for _ in range(self.num_epochs):
                 perm_idx = torch.randperm(num_sample)[:batch_size]
-                sub_x = torch.Tensor(X[perm_idx])
-                sub_y = torch.Tensor(Y[perm_idx])
-                sub_t = torch.Tensor(T[perm_idx])
-                sub_propensity = torch.Tensor(propensity[perm_idx, :])
+                sub_x = torch.Tensor(X[perm_idx]).to(device)
+                sub_y = torch.Tensor(Y[perm_idx]).to(device)
+                sub_t = torch.Tensor(T[perm_idx]).to(device)
+                sub_propensity = torch.Tensor(propensity[perm_idx, :]).to(device)
+
+                # propensity loss
+                pred_propensity = self.cdm.propensity_model(sub_x)
+                xent_loss = nn.BCELoss()(pred_propensity, sub_t)
 
                 # pred = self.cdm.lr_model(sub_x).reshape(batch_size, -1)
                 pred_cate = self.cdm.ips_model(sub_x).reshape(batch_size, -1)
@@ -146,12 +148,12 @@ class PDAGTrainer:
                 # removing lr_model: pred -> sub_y
                 CATE_y = self.ips_update_y(sub_t.reshape(batch_size, -1), sub_y, sub_propensity.reshape(batch_size, -1))
 
-                loss = self.beta * torch.mean((pred_cate - CATE_y) ** 2) + self.constrain_coef * CATE_bound
+                loss = xent_loss + self.beta * torch.mean((pred_cate - CATE_y) ** 2) + self.constrain_coef * CATE_bound
 
                 grad_norm_dict = self.cdm_optimizer.step(loss, batch_size, it)
-
                 pred_cate_stat = pred_cate.detach().mean(0).cpu().numpy()
                 batch_metrics = {"pred_cate_reward": pred_cate_stat[0], "pred_cate_cost": pred_cate_stat[1], "loss": loss.item(), **grad_norm_dict}
+
                 for k, v in batch_metrics.items():
                     if k not in metrics:
                         metrics[k] = []
@@ -160,18 +162,41 @@ class PDAGTrainer:
         for k in metrics:
             metrics[k] = torch.tensor(metrics[k]).mean().item()
 
-        feat_stats = torch.split((outputs["feat"] - outputs["treatment_feat"]).detach().cpu().mean(0), [self.cdm.y_dim, self.cdm.a_dim, self.cdm.y_dim])
-
-        metrics["diff_feat_a"] = feat_stats[1].mean().item()
-        metrics["diff_feat_next_y"] = feat_stats[2].mean().item()
-        metrics["diff_eff_r"] = (outputs["effects"]["reward"] - outputs["treatment_effects"]["reward"]).detach().cpu().mean().item()
-        metrics["diff_eff_c"] = (outputs["effects"]["cost"] - outputs["treatment_effects"]["cost"]).detach().cpu().mean().item()
+        with torch.no_grad():
+            feat_stats = torch.split((outputs["feat"] - outputs["treatment_feat"]).cpu().mean(0), [self.cdm.y_dim, self.cdm.a_dim, self.cdm.y_dim])
+            metrics["diff_feat_a"] = feat_stats[1].mean().item()
+            metrics["diff_feat_next_y"] = feat_stats[2].mean().item()
+            metrics["diff_eff_r"] = (outputs["effects"]["reward"] - outputs["treatment_effects"]["reward"]).cpu().mean().item()
+            metrics["diff_eff_c"] = (outputs["effects"]["cost"] - outputs["treatment_effects"]["cost"]).cpu().mean().item()
 
         return metrics
 
-    def _train_propensity(self, data, label) -> dict:
-        metrics = {}
-        # TBD
-        with self.autocast():
-            pass
-        return metrics
+    # def _train_propensity(self, data, label, it) -> Dict:
+    #     metrics = {}
+    #     device = self.cdm.device
+
+    #     num_sample = data.shape[0]
+    #     batch_size = self.batch_size
+    #     total_batch = num_sample // batch_size
+
+    #     epoch_loss = 0
+
+    #     with self.autocast():
+    #         perm_idx = torch.randperm(num_sample)
+
+    #         for idx in range(total_batch):
+    #             start_idx = batch_size * idx
+    #             end_idx = min(start_idx + batch_size, num_sample)
+    #             selected_idx = perm_idx[start_idx:end_idx]
+
+    #             sub_x = data[selected_idx].to(device)
+    #             sub_t = label[selected_idx].to(device)
+
+    #             pred = self.cdm.propensity_model(sub_x)
+    #             xent_loss = nn.BCELoss()(pred, sub_t)
+
+    #             self.cdm_optimizer.step(xent_loss.mean(), batch_size, it)
+    #             epoch_loss += xent_loss.detach().cpu().item()
+
+    #     metrics["propensity_loss"] = epoch_loss / total_batch if total_batch > 0 else epoch_loss
+    #     return metrics
