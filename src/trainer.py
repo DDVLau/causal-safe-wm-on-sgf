@@ -5,7 +5,7 @@ import torch
 import replay
 import utils
 import gymnasium as gym
-from agent import AgentTrainer, AgentExplorationTrainer
+from agent import AgentTrainer, AgentExplorationTrainer, AgentCPOTrainer
 from wm import WorldModelTrainer, WorldModelDecomposedTrainer
 from causal import PDAGTrainer
 
@@ -17,6 +17,7 @@ class TrainerCausalWM:
         self,
         env,
         game,
+        algo,
         wm,
         cdm,
         agent,
@@ -34,6 +35,7 @@ class TrainerCausalWM:
         wm_trainer,
         cdm_trainer,
         agent_trainer,
+        explore_agent_trainer,
         wm_eval,
         agent_eval,
         buffer_device,
@@ -63,7 +65,9 @@ class TrainerCausalWM:
 
         # Initialize the replay buffer
         start_o, _ = env.reset(seed=seed)
-        replay_buffer = replay.ReplayBuffer(env.observation_space, agent.stacked_action_space, env_steps, start_o, use_cost=use_decom_wm, device=buffer_device)
+
+        buffer_class = replay.ReplayBufferSafeRL if use_decom_wm else replay.ReplayBuffer
+        replay_buffer = buffer_class(env.observation_space, agent.stacked_action_space, env_steps, start_o, device=buffer_device)
         self.replay_buffer = replay_buffer
 
         # Initialize the world model and agent trainers
@@ -75,15 +79,19 @@ class TrainerCausalWM:
             self.wm_trainer = WorldModelDecomposedTrainer(
                 wm, replay_buffer, **wm_trainer, init_steps=init_steps, eval_mode=wm_eval, total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_
             )
+        if algo == "cpo":
+            self.agent_trainer = AgentCPOTrainer(
+                game, agent, wm, replay_buffer, **agent_trainer, eval_mode=agent_eval, total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_
+            )
+        else:
+            self.agent_trainer = AgentTrainer(
+                game, agent, wm, replay_buffer, **agent_trainer, eval_mode=agent_eval, total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_
+            )
 
-        self.agent_trainer = AgentTrainer(game, agent, wm, replay_buffer, **agent_trainer, eval_mode=agent_eval, total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_)
-
-        # TODO
         self.explore_agent_trainer = AgentExplorationTrainer(
-            game, explore_agent, wm, cdm, replay_buffer, **agent_trainer, eval_mode=agent_eval, total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_
+            game, explore_agent, wm, cdm, replay_buffer, **explore_agent_trainer, eval_mode=agent_eval, total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_
         )
 
-        # TODO: Placeholder for PDAGTrainer
         self.pdag_trainer = PDAGTrainer(cdm, **cdm_trainer, total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_)
 
         self.it = -1

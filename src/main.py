@@ -10,6 +10,7 @@ import envs
 import utils
 from agent import Agent
 from ac import ActorCriticPolicy
+from cpo import CPOPolicy
 from wm import WorldModel, WorldModelDecomposed
 from causal import PDAGLearning
 from trainer import Trainer, TrainerCausalWM
@@ -71,12 +72,14 @@ def main():
 
     y_dim = config.wm["y_dim"] if type(config.wm["y_dim"]) is not dict else sum(config.wm["y_dim"].values()) * 2
     a_dim = env.action_space.n if hasattr(env.action_space, "n") else env.action_space.shape[0]
-    policy = ActorCriticPolicy(y_dim, a_dim, config.policy["actor"], config.policy["critic"], compile_=compile_, device=device)
+    if config.policy["algo"] == "ac":
+        policy = ActorCriticPolicy(y_dim, a_dim, config.policy["actor"], config.policy["critic"], compile_=compile_, device=device)
+    elif config.policy["algo"] == "cpo":
+        policy = CPOPolicy(y_dim, a_dim, config.policy["actor"], config.policy["reward_critic"], config.policy["cost_critic"], compile_=compile_, device=device)
     agent = Agent(policy, env.action_space, config.action_stack)
 
     # Exploration agent
-    explore_policy = ActorCriticPolicy(y_dim, a_dim, config.policy["actor"], config.policy["critic"], compile_=compile_, device=device)
-    explore_policy.load_state_dict(policy.state_dict().copy())
+    explore_policy = ActorCriticPolicy(y_dim, a_dim, config.explore_policy["actor"], config.explore_policy["critic"], compile_=compile_, device=device)
     explore_agent = Agent(explore_policy, env.action_space, config.action_stack)
 
     wm = (
@@ -113,6 +116,7 @@ def main():
         else TrainerCausalWM(
             env,
             config.game,
+            config.policy["algo"],
             wm,
             cdm,
             agent,

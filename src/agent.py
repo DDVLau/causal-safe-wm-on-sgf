@@ -338,3 +338,93 @@ class AgentExplorationTrainer(AgentTrainer):
         # Train the policy on the synthesized data
         metrics = self.policy_trainer.train(it, ys, next_ys[-1], as_, final_reward, next_cs, next_terms)
         return metrics
+
+
+class AgentCPOTrainer(AgentTrainer):
+    def __init__(
+        self,
+        game,
+        agent,
+        world_model,
+        replay_buffer,
+        batch_size,
+        horizon,
+        policy_trainer,
+        eval_env,
+        eval_num_parallel,
+        eval_temperature,
+        eval_epsilon,
+        eval_episodes,
+        final_eval_episodes,
+        eval_mode,
+        *,
+        total_its,
+        rng,
+        autocast,
+        compile_=None,
+    ):
+        super().__init__(
+            game,
+            agent,
+            world_model,
+            replay_buffer,
+            batch_size,
+            horizon,
+            policy_trainer,
+            eval_env,
+            eval_num_parallel,
+            eval_temperature,
+            eval_epsilon,
+            eval_episodes,
+            final_eval_episodes,
+            eval_mode=eval_mode,
+            total_its=total_its,
+            rng=rng,
+            autocast=autocast,
+            compile_=compile_,
+        )
+
+    def train(self, it, start_y=None):
+        """Train the agent for one iteration. Optionally provide starting states."""
+
+        agent = self.agent
+        wm = self.world_model
+        buffer = self.replay_buffer
+        batch_size = self.batch_size
+
+        # Synthesize data from the world model
+        wm.eval()
+        agent.eval()
+        with self.autocast():
+            with torch.no_grad():
+                if start_y is None:
+                    # sample start from replay buffer
+                    idx = buffer.sample_idx(batch_size, self.rng)
+                    o = buffer.get(idx, "next_o")[0]
+                    o = o.to(wm.device)
+                    start_y = wm.encode(o)
+                elif start_y.shape[0] >= batch_size:
+                    start_y = start_y[:batch_size]
+                else:
+                    idx = buffer.sample_idx(batch_size - start_y.shape[0], self.rng)
+                    remaining_o = buffer.get(idx, "next_o")[0]
+                    remaining_o = remaining_o.to(wm.device)
+                    remaining_y = wm.encode(remaining_o)
+                    start_y = torch.cat([start_y, remaining_y], 0)
+
+                outs = wm.imagine(agent, self.horizon, start_y)
+                if len(outs) == 6:
+                    ys, as_, _, next_ys, next_rs, next_terms = outs
+                    next_cs = None
+                elif len(outs) == 7:
+                    ys, as_, _, next_ys, next_rs, next_cs, next_terms = outs
+
+                ys = torch.stack(ys, 0)
+                as_ = torch.stack(as_, 0)
+                next_terms = torch.stack(next_terms, 0)
+                next_rs = torch.stack(next_rs, 0)
+                next_cs = torch.stack(next_cs, 0) if next_cs is not None else None
+
+        # Train the policy on the synthesized data
+        metrics = self.policy_trainer.train(it, ys, next_ys[-1], as_, next_rs, next_cs, next_terms)
+        return metrics

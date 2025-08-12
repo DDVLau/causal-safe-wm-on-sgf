@@ -103,7 +103,8 @@ wm:
     reward_bar: 0.1
     cost_bar: 0.1
 
-policy:
+explore_policy:
+  algo: ac
   actor:
     dims: 512-512
     norm: layer
@@ -112,6 +113,41 @@ policy:
     out_init: zeros
 
   critic:
+    dims: 512-512
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_init: zeros
+    dist: twohot
+    pred: mean
+    symlog: true
+    num_bins: 255
+    low: -20
+    high: 20
+
+policy:
+  algo: cpo
+  actor:
+    dims: 512-512
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_init: zeros
+
+  reward_critic:
+    dims: 512-512
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_init: zeros
+    dist: twohot
+    pred: mean
+    symlog: true
+    num_bins: 255
+    low: -20
+    high: 20
+
+  cost_critic:
     dims: 512-512
     norm: layer
     act: silu
@@ -233,7 +269,64 @@ trainer:
     eval_epsilon: 0.0
     eval_episodes: 20 # debugging
     final_eval_episodes: 100
+    policy_trainer:
+      reward_act: none
+      return_norm: true
+      gamma: 0.997
+      lmbda: 0.95
+      entropy_coef: 0.001
+      target_decay: 0.98
+      target_returns: false
+      target_coef: 1.0
+      target_every: 1
 
+      actor_optimizer:
+        name: actor
+        type: adamw
+        base_lr: 2e-7
+        end_lr: 2e-7
+        warmup_its: 0
+        betas: [ 0.9, 0.999 ]
+        eps: 1e-5
+        weight_decay: 0.0
+        clip: 100.0
+
+      critic_optimizer:
+        name: critic
+        type: adamw
+        base_lr: 2e-7
+        end_lr: 2e-7
+        warmup_its: 0
+        betas: [ 0.9, 0.999 ]
+        eps: 1e-5
+        weight_decay: 0.0
+        clip: 100.0
+    
+      cpo_params:
+        target_kl: 0.01
+        cost_limit: 25.0
+        damping_coef: 0.1
+        cg_iters: 10
+        backtrack_iters: 10
+        backtrack_coef: 0.8
+
+  # Copy from agent_trainer
+  explore_agent_trainer:
+    batch_size: 2048 # debugging
+    horizon: 10
+
+    eval_env:
+      camera_name: vision
+      width: 64
+      height: 64
+      max_frames: 1000
+      frame_stack: 4
+      action_repeat: 2
+    eval_num_parallel: 1
+    eval_temperature: 0.5
+    eval_epsilon: 0.0
+    eval_episodes: 20 # debugging
+    final_eval_episodes: 100
     policy_trainer:
       reward_act: none
       return_norm: true
