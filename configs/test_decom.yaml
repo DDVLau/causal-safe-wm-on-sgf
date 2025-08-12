@@ -6,7 +6,7 @@ env:
   camera_name: vision
   width: 64
   height: 64
-  max_frames: 1000
+  max_frames: 500
   frame_stack: 4
   action_repeat: 2
 
@@ -304,7 +304,7 @@ trainer:
     
       cpo_params:
         target_kl: 0.01
-        cost_limit: 25.0
+        cost_limit: 10
         damping_coef: 0.1
         cg_iters: 10
         backtrack_iters: 10

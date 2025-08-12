@@ -207,7 +207,7 @@ class CPOTrainer:
 
         if torch.any(constraint_violation > 0):  # Constraint violated
             # Only use data from violating trajectories for constraint optimization
-            violating_mask = constraint_violation.squeeze(0) > 0
+            violating_mask = constraint_violation > 0
             violating_indices = torch.where(violating_mask)[0]
             xs_violating = xs[:, violating_indices, :]
             x_flat = utils.flatten_seq(xs_violating)

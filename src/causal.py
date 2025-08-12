@@ -3,6 +3,7 @@ import nets
 
 from typing import Dict
 from torch import nn
+from torch.nn import functional as F
 
 
 class PDAGLearning(nn.Module):
@@ -34,6 +35,7 @@ class PDAGLearning(nn.Module):
         explore_agent.eval()
 
         def get_effects(wm, agent, yt):
+            # One-step
             effect_preds = dict(reward=None, cost=None)
             next_ = wm.imagine(agent, horizon=1, start_y=yt)
             y = next_[0][0]
@@ -161,10 +163,12 @@ class PDAGTrainer:
             metrics[k] = torch.tensor(metrics[k]).mean().item()
 
         with torch.no_grad():
-            feat_stats = torch.split((outputs["feat"] - outputs["treatment_feat"]).cpu().mean(0), [self.cdm.y_dim, self.cdm.a_dim, self.cdm.y_dim])
-            metrics["diff_feat_a"] = feat_stats[1].mean().item()
-            metrics["diff_feat_next_y"] = feat_stats[2].mean().item()
-            metrics["diff_eff_r"] = (outputs["effects"]["reward"] - outputs["treatment_effects"]["reward"]).cpu().mean().item()
-            metrics["diff_eff_c"] = (outputs["effects"]["cost"] - outputs["treatment_effects"]["cost"]).cpu().mean().item()
+            feat_stats_original = torch.split(outputs["feat"].cpu(), [self.cdm.y_dim, self.cdm.a_dim, self.cdm.y_dim], dim=1)
+            feat_stats_treatment = torch.split(outputs["treatment_feat"].cpu(), [self.cdm.y_dim, self.cdm.a_dim, self.cdm.y_dim], dim=1)
+
+            metrics["diff_feat_a"] = F.mse_loss(feat_stats_original[1], feat_stats_treatment[1]).item()
+            metrics["diff_feat_next_y"] = F.mse_loss(feat_stats_original[2], feat_stats_treatment[2]).item()
+            metrics["diff_eff_r"] = (outputs["effects"]["reward"] - outputs["treatment_effects"]["reward"]).abs().mean().item()
+            metrics["diff_eff_c"] = (outputs["effects"]["cost"] - outputs["treatment_effects"]["cost"]).abs().mean().item()
 
         return metrics

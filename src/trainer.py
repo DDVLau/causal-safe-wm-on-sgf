@@ -26,7 +26,7 @@ class TrainerCausalWM:
         env_steps,
         init_steps,
         env_epsilon,
-        env_temperature,
+        env_temperature,  # Not used
         wm_every,
         cdm_every,
         agent_every,
@@ -54,7 +54,6 @@ class TrainerCausalWM:
         self.env_steps = env_steps
         self.init_steps = init_steps
         self.env_epsilon = env_epsilon
-        self.env_temperature = env_temperature
         self.wm_every = wm_every
         self.cdm_every = cdm_every
         self.agent_every = agent_every
@@ -162,7 +161,7 @@ class TrainerCausalWM:
                 if self.rng.random() < self.env_epsilon:
                     a, stacked_a, self.agent_state = agent.act_randomly(self.agent_state, self.cont_mask, self.rng)
                 else:
-                    a, stacked_a, self.agent_state = agent.act(self.agent_state, self.cont_mask, y, temperature=self.env_temperature)
+                    a, stacked_a, self.agent_state = agent.act(self.agent_state, self.cont_mask, y)
 
         # Take a step in the environment
         self._env_step(a, stacked_a)
@@ -250,7 +249,7 @@ class Trainer:
         env_steps,
         init_steps,
         env_epsilon,
-        env_temperature,
+        env_temperature,  # Not used
         wm_every,
         agent_every,
         log_every,
@@ -273,7 +272,6 @@ class Trainer:
         self.env_steps = env_steps
         self.init_steps = init_steps
         self.env_epsilon = env_epsilon
-        self.env_temperature = env_temperature
         self.wm_every = wm_every
         self.agent_every = agent_every
         self.log_every = log_every
@@ -361,7 +359,7 @@ class Trainer:
                 if self.rng.random() < self.env_epsilon:
                     a, stacked_a, self.agent_state = agent.act_randomly(self.agent_state, self.cont_mask, self.rng)
                 else:
-                    a, stacked_a, self.agent_state = agent.act(self.agent_state, self.cont_mask, y, temperature=self.env_temperature)
+                    a, stacked_a, self.agent_state = agent.act(self.agent_state, self.cont_mask, y)
 
         # Take a step in the environment
         self._env_step(a, stacked_a)

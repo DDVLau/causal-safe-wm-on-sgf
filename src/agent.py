@@ -117,6 +117,7 @@ class AgentTrainer:
         self.eval_epsilon = eval_epsilon
         self.eval_episodes = eval_episodes
         self.final_eval_episodes = final_eval_episodes
+        self.total_its = total_its  # Backup this
         self.eval_mode = eval_mode
         self.rng = rng
         self.autocast = autocast
@@ -333,7 +334,8 @@ class AgentExplorationTrainer(AgentTrainer):
                 curiosity_r = torch.stack(curiosity_r, 0)
                 curiosity_c = torch.stack(curiosity_c, 0)
 
-                final_reward = next_rs + curiosity_r + curiosity_c
+                decay = (1 - float(it) / self.total_its) ** 0.5
+                final_reward = next_rs + decay * (curiosity_r + curiosity_c)
 
         # Train the policy on the synthesized data
         metrics = self.policy_trainer.train(it, ys, next_ys[-1], as_, final_reward, next_cs, next_terms)
