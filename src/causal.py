@@ -52,7 +52,7 @@ class PDAGLearning(nn.Module):
 
         return dict(feat=feat, effects=effects, treatment_feat=treatment_feat, treatment_effects=treatment_effects, propensity=propensity)
 
-    def curiosity(self, y, a, flat_a, wm, eps=1e-3):
+    def curiosity(self, y, a, flat_a, wm, eps=1e-2):
         """
         Multi-method curiosity implementation with control variable.
 
@@ -143,16 +143,14 @@ class PDAGTrainer:
 
                 # TODO: C should be prediction of normalised reward/cost
                 C = self.C
-                CATE_bound = torch.max(torch.sum(torch.clip(-C - pred_cate, 0, 10) + torch.clip(-C + pred_cate, 0, 10), dim=0))
-                # TODO: this should be changed according to new sub_t and sub_propensity
-                # removing lr_model: pred -> sub_y
+                CATE_bound = torch.max(torch.sum(torch.clip(-C - pred_cate, 0, 1) + torch.clip(-C + pred_cate, 0, 1), dim=0))
                 CATE_y = self.ips_update_y(sub_t.reshape(batch_size, -1), sub_y, sub_propensity.reshape(batch_size, -1))
 
                 loss = xent_loss + self.beta * torch.mean((pred_cate - CATE_y) ** 2) + self.constrain_coef * CATE_bound
 
                 grad_norm_dict = self.cdm_optimizer.step(loss, batch_size, it)
                 pred_cate_stat = pred_cate.detach().mean(0).cpu().numpy()
-                batch_metrics = {"pred_cate_reward": pred_cate_stat[0], "pred_cate_cost": pred_cate_stat[1], "loss": loss.item(), **grad_norm_dict}
+                batch_metrics = {"pred_cate_reward": pred_cate_stat[0], "pred_cate_cost": pred_cate_stat[1], "loss": loss.item(), "cate_bound": CATE_bound.item(), **grad_norm_dict}
 
                 for k, v in batch_metrics.items():
                     if k not in metrics:
@@ -170,33 +168,3 @@ class PDAGTrainer:
             metrics["diff_eff_c"] = (outputs["effects"]["cost"] - outputs["treatment_effects"]["cost"]).cpu().mean().item()
 
         return metrics
-
-    # def _train_propensity(self, data, label, it) -> Dict:
-    #     metrics = {}
-    #     device = self.cdm.device
-
-    #     num_sample = data.shape[0]
-    #     batch_size = self.batch_size
-    #     total_batch = num_sample // batch_size
-
-    #     epoch_loss = 0
-
-    #     with self.autocast():
-    #         perm_idx = torch.randperm(num_sample)
-
-    #         for idx in range(total_batch):
-    #             start_idx = batch_size * idx
-    #             end_idx = min(start_idx + batch_size, num_sample)
-    #             selected_idx = perm_idx[start_idx:end_idx]
-
-    #             sub_x = data[selected_idx].to(device)
-    #             sub_t = label[selected_idx].to(device)
-
-    #             pred = self.cdm.propensity_model(sub_x)
-    #             xent_loss = nn.BCELoss()(pred, sub_t)
-
-    #             self.cdm_optimizer.step(xent_loss.mean(), batch_size, it)
-    #             epoch_loss += xent_loss.detach().cpu().item()
-
-    #     metrics["propensity_loss"] = epoch_loss / total_batch if total_batch > 0 else epoch_loss
-    #     return metrics

@@ -238,7 +238,7 @@ trainer:
     propensity_coef: 1.0
     beta: 1.0
     constrain_coef: 0.1
-    C: 1.0
+    C: 0.001
     batch_size: 512
     num_epochs: 3
 
