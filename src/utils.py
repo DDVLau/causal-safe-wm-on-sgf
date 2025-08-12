@@ -128,10 +128,7 @@ def two_hot(tensor, bins):
     total = dist_to_below + dist_to_above
     weight_below = dist_to_above / total
     weight_above = dist_to_below / total
-    return (
-        torch.nn.functional.one_hot(below.squeeze(-1), num_bins) * weight_below
-        + torch.nn.functional.one_hot(above.squeeze(-1), num_bins) * weight_above
-    )
+    return torch.nn.functional.one_hot(below.squeeze(-1), num_bins) * weight_below + torch.nn.functional.one_hot(above.squeeze(-1), num_bins) * weight_above
 
 
 def grayscale(x, dim, keepdim=False):
@@ -343,7 +340,7 @@ def apply_seq(fn, *args, unflatten=True, **kwargs):
     shape = all_values[0].shape[:2]
     for i in range(1, len(all_values)):
         if all_values[i].shape[:2] != shape:
-            raise ValueError('Batch shapes of all inputs must match')
+            raise ValueError("Batch shapes of all inputs must match")
 
     args = flatten_seq(args)
     result = fn(*args, **kwargs)
@@ -389,10 +386,10 @@ def ema_update(src_net, tgt_net, decay):
 class Aggregator:
     """Aggregator for metrics."""
 
-    def __init__(self, op, non_numeric='raise', same_keys=True):
-        if op not in ('mean', 'max', 'min'):
+    def __init__(self, op, non_numeric="raise", same_keys=True):
+        if op not in ("mean", "max", "min"):
             raise ValueError(op)
-        if non_numeric not in ('raise', 'first', 'last'):
+        if non_numeric not in ("raise", "first", "last"):
             raise ValueError(non_numeric)
 
         self.op = op
@@ -430,13 +427,13 @@ class Aggregator:
             return result
 
         def raise_non_numeric(k, vs):
-            raise ValueError(f'Non-numeric value for key {k}')
+            raise ValueError(f"Non-numeric value for key {k}")
 
-        op = {'mean': np.mean, 'max': np.max, 'min': np.min}[self.op]
+        op = {"mean": np.mean, "max": np.max, "min": np.min}[self.op]
         non_numeric = {
-            'raise': raise_non_numeric,  # single-line raise not allowed
-            'first': lambda k, vs: vs[0],
-            'last': lambda k, vs: vs[-1],
+            "raise": raise_non_numeric,  # single-line raise not allowed
+            "first": lambda k, vs: vs[0],
+            "last": lambda k, vs: vs[-1],
         }[self.non_numeric]
 
         for k, values in self.history.items():
@@ -461,28 +458,28 @@ class EpisodeCollector:
     def __init__(self, env_id, wrappers, kwargs, num_parallel):
         if num_parallel == 1:
             # Special handling for safety_gymnasium environments
-            if env_id.startswith('safety_gym'):
+            if env_id.startswith("safety_gym"):
                 try:
                     import safety_gymnasium
                 except ImportError:
                     raise ImportError("Please install safety-gymnasium.")
-                env = safety_gymnasium.make(env_id.split(':', 1)[1], **kwargs)
+                env = safety_gymnasium.make(env_id.split(":", 1)[1], **kwargs)
                 for wrapper in wrappers:
                     env = wrapper(env)
                 self.vector_env = env
             else:
-                self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode='sync', wrappers=wrappers, **kwargs)
+                self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode="sync", wrappers=wrappers, **kwargs)
         else:
-            self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode='async', wrappers=wrappers, **kwargs)
+            self.vector_env = gym.make_vec(env_id, num_envs=num_parallel, vectorization_mode="async", wrappers=wrappers, **kwargs)
 
     def close(self):
         self.vector_env.close()
 
     def collect(self, seed, num_episodes, policy_fn, reset_fn, step_fn, aggregate_fn):
         vector_env = self.vector_env
-        num_parallel = getattr(vector_env, 'num_envs', 1)
+        num_parallel = getattr(vector_env, "num_envs", 1)
         if (num_episodes % num_parallel) != 0:
-            warnings.warn('Number of episodes is not divisible by the number of parallel environments')
+            warnings.warn("Number of episodes is not divisible by the number of parallel environments")
 
         aggs = []
         num_done = 0
@@ -491,7 +488,7 @@ class EpisodeCollector:
             if num_parallel == 1:
                 o, _ = vector_env.reset(seed=seed + num_done)
                 agg = reset_fn(np.array([True]), o)
-                agg['episode_cost'] = np.array([0.0])
+                agg["episode_cost"] = np.array([0.0])
                 state = None
                 done = False
                 just_done = np.array([False])
@@ -501,9 +498,9 @@ class EpisodeCollector:
                     a, state = policy_fn(o, state, just_done)
                     next_o, next_r, next_term, next_trunc, info = vector_env.step(a.squeeze(0))
                     done = next_term or next_trunc
-                    agg['episode_reward'][0] += next_r
-                    agg['episode_cost'][0] += info.get('cost', 0)
-                    agg['episode_length'][0] += 1
+                    agg["episode_reward"][0] += next_r
+                    agg["episode_cost"][0] += info.get("cost", 0)
+                    agg["episode_length"][0] += 1
                     just_done = np.array([done])
                     o = next_o
             else:
@@ -527,7 +524,7 @@ class EpisodeCollector:
                     just_done = next_done[cont]
                     cont = cont & ~next_done
                     o = next_o
-            
+
             num_done += num_parallel
             aggs.append(agg)
 
@@ -537,19 +534,19 @@ class EpisodeCollector:
         def reset(cont, o):
             n = cont.shape[0]
             return {
-                'episode_reward': np.zeros(n, dtype=np.float64),
-                'episode_length': np.zeros(n, dtype=np.int64),
+                "episode_reward": np.zeros(n, dtype=np.float64),
+                "episode_length": np.zeros(n, dtype=np.int64),
             }
 
         def step(agg, cont, o, a, next_o, next_r, next_term, next_trunc):
-            agg['episode_reward'][cont] += next_r[cont]
-            agg['episode_length'][cont] += 1
+            agg["episode_reward"][cont] += next_r[cont]
+            agg["episode_length"][cont] += 1
             return agg
 
         def aggregate(aggs):
             return {
-                'episode_reward': np.concatenate([agg['episode_reward'] for agg in aggs]),
-                'episode_length': np.concatenate([agg['episode_length'] for agg in aggs]),
+                "episode_reward": np.concatenate([agg["episode_reward"] for agg in aggs]),
+                "episode_length": np.concatenate([agg["episode_length"] for agg in aggs]),
             }
 
         return self.collect(seed, num_episodes, policy_fn, reset, step, aggregate)
@@ -641,7 +638,7 @@ def _zeros_discrete(space, size=tuple(), device=None):
     return torch.zeros(size + tuple(space.shape), dtype=torch.int32, device=device)
 
 
-#region Distributions
+# region Distributions
 
 
 class SampleDist:
@@ -737,10 +734,7 @@ class DiscDist:
         total = dist_to_below + dist_to_above
         weight_below = dist_to_above / total
         weight_above = dist_to_below / total
-        target = (
-            F.one_hot(below, num_classes=len(self.buckets)) * weight_below[..., None]
-            + F.one_hot(above, num_classes=len(self.buckets)) * weight_above[..., None]
-        )
+        target = F.one_hot(below, num_classes=len(self.buckets)) * weight_below[..., None] + F.one_hot(above, num_classes=len(self.buckets)) * weight_above[..., None]
         log_pred = self.logits - torch.logsumexp(self.logits, -1, keepdim=True)
         target = target.squeeze(-2)
 
@@ -909,4 +903,10 @@ class TanhBijector(torchd.Transform):
         return 2.0 * (log2 - x - torch.softplus(-2.0 * x))
 
 
-#endregion
+# endregion
+
+
+# region graph visualisation
+
+
+# endregion
