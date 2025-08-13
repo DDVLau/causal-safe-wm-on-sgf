@@ -125,20 +125,19 @@ class CPOTrainer:
         return torch.cat(grads)
 
     def conjugate_gradients(self, Avp, fvp_obs, b, nsteps, residual_tol=1e-10, eps=1e-6):
-        """Conjugate gradient algorithm for solving Ax = b."""
         x = torch.zeros_like(b)
-        r = b.clone()
+        r = b.clone() - Avp(x, fvp_obs)
         p = r.clone()
         rdotr = torch.dot(r, r)
 
         for i in range(nsteps):
             _Avp = Avp(p, fvp_obs)
-            alpha = rdotr / torch.dot(p, _Avp)
+            alpha = rdotr / (torch.dot(p, _Avp) + eps)
             x += alpha * p
             r -= alpha * _Avp
             new_rdotr = torch.dot(r, r)
-            betta = new_rdotr / rdotr
-            p = r + betta * p
+            mu = new_rdotr / (rdotr + eps)
+            p = r + mu * p
             rdotr = new_rdotr
             if rdotr < residual_tol:
                 break
