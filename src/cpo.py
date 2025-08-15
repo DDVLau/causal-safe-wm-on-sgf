@@ -162,7 +162,8 @@ class CPOTrainer:
             # Compute policy losses
             actor_stats = actor.get_stats(x, full_precision=True)
             reward_loss = actor.reinforce_loss(actor_stats, a, adv_r, seq_mask)
-            cost_loss = actor.reinforce_loss(actor_stats, a, adv_c, seq_mask)
+            # minimal cost
+            cost_loss = -actor.reinforce_loss(actor_stats, a, adv_c, seq_mask)
             entropy_loss = actor.entropy_loss(actor_stats, a, seq_mask)
 
             # KL divergence
