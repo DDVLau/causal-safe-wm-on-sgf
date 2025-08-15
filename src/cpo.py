@@ -213,8 +213,8 @@ class CPOTrainer:
 
         # Optim case classification
         if cost_gradient_norm <= 1e-6 and ep_costs_mean < 0:
-            A = torch.zeros(1)
-            B = torch.zeros(1)
+            A = torch.zeros(1, device=x.device)
+            B = torch.zeros(1, device=x.device)
             optim_case = 4
         else:
             # Compute quadratic approximation terms
@@ -238,23 +238,23 @@ class CPOTrainer:
         if optim_case in (3, 4):
             # Unconstrained or degenerate case
             final_step = step_dir / lm
-            nu_star = torch.zeros(1)
+            nu_star = torch.zeros(1, device=x.device)
             lambda_star = 1 / (lm + 1e-8)
 
         elif optim_case in (1, 2):
             # Constrained cases - need quadratic optimization
-            lambda_a = torch.sqrt(A / B) if B > 0 else torch.zeros(1)
+            lambda_a = torch.sqrt(A / B) if B > 0 else torch.zeros(1, device=x.device)
             lambda_b = torch.sqrt(sHs / (2 * self.target_kl))
 
             r_val = r.item()
             eps_cost = ep_costs_mean + 1e-8
 
             if ep_costs_mean < 0:
-                lambda_a_star = self.project_lambda(lambda_a, torch.tensor(0.0), torch.tensor(r_val / eps_cost))
-                lambda_b_star = self.project_lambda(lambda_b, torch.tensor(r_val / eps_cost), torch.tensor(float("inf")))
+                lambda_a_star = self.project_lambda(lambda_a, torch.tensor(0.0, device=lambda_a.device), torch.tensor(r_val / eps_cost, device=lambda_a.device))
+                lambda_b_star = self.project_lambda(lambda_b, torch.tensor(r_val / eps_cost, device=lambda_b.device), torch.tensor(float("inf"), device=lambda_b.device))
             else:
-                lambda_a_star = self.project_lambda(lambda_a, torch.tensor(r_val / eps_cost), torch.tensor(float("inf")))
-                lambda_b_star = self.project_lambda(lambda_b, torch.tensor(0.0), torch.tensor(r_val / eps_cost))
+                lambda_a_star = self.project_lambda(lambda_a, torch.tensor(r_val / eps_cost, device=lambda_a.device), torch.tensor(float("inf"), device=lambda_a.device))
+                lambda_b_star = self.project_lambda(lambda_b, torch.tensor(0.0, device=lambda_b.device), torch.tensor(r_val / eps_cost, device=lambda_b.device))
 
             # Choose optimal lambda
             f_a = -0.5 * (A / (lambda_a_star + 1e-8) + B * lambda_a_star) - r * ep_costs_mean / (s + 1e-8)
@@ -268,7 +268,7 @@ class CPOTrainer:
         else:
             # Infeasible case (optim_case = 0)
             nu_star = torch.sqrt(2 * self.target_kl / (s + 1e-8))
-            lambda_star = torch.zeros(1)
+            lambda_star = torch.zeros(1, device=x.device)
             final_step = -nu_star * cost_step
 
         # Backtracking line search
