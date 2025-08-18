@@ -172,7 +172,7 @@ trainer:
   log_every: 100
   eval_every: 2500 # debugging
   cdm_start: 0
-  pdag_start: 100000 # debugging
+  pdag_start: 2500 # debugging
 
   wm_trainer:
     batch_size: 1024
