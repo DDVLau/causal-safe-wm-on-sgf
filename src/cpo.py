@@ -187,7 +187,7 @@ class CPOTrainer:
         loss_reward_before = reward_loss.item()
 
         # Solve for step direction using CPO update rule
-        reward_step = self.conjugate_gradients(fvp, x, -policy_grads, self.cg_iters)
+        reward_step = self.conjugate_gradients(fvp, x, policy_grads, self.cg_iters)
         xHx = torch.dot(reward_step, fvp(reward_step, x))
         lm = torch.sqrt(2 * self.target_kl / xHx)
 
