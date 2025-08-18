@@ -6,6 +6,8 @@
 * Python >=3.8 <3.11 (tested on 3.10.18)
 * [uv](https://github.com/astral-sh/uv) (v0.7.20)
 
+Install `graphviz` for visualization graphs.
+
 To run experiments locally, give the following a try:
 
 ```bash

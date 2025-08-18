@@ -12,6 +12,7 @@ dependencies = [
     "wandb>=0.21.0",
     "moviepy>=2.2.1",
     "matplotlib>=3.10.3",
+    "causal-learn>=0.1.4.3",
 ]
 [dependency-groups]
 safetygym = [
