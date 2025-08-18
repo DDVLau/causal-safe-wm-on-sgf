@@ -12,8 +12,8 @@ env:
 
 wm:
   y_dim:
-    reward: 512
-    cost: 512
+    reward: 256
+    cost: 256
   z_dim: 2048
   mist_hidden_dim: 64
 
@@ -166,10 +166,13 @@ trainer:
   env_epsilon: 0.01
   env_temperature: 1.0
   wm_every: 2
-  cdm_every: 10 # debugging
+  cdm_every: 50 # debugging
   agent_every: 2
+  pdag_every: 500 # debugging
   log_every: 100
-  eval_every: 2500
+  eval_every: 2500 # debugging
+  cdm_start: 0
+  pdag_start: 100000 # debugging
 
   wm_trainer:
     batch_size: 1024
@@ -274,7 +277,6 @@ trainer:
       return_norm: true
       gamma: 0.997
       lmbda: 0.95
-      entropy_coef: 0.001
       target_decay: 0.98
       target_returns: false
       target_coef: 1.0
@@ -304,8 +306,8 @@ trainer:
     
       cpo_params:
         target_kl: 0.01
+        batch_size: 128
         cost_limit: 10
-        damping_coef: 0.1
         cg_iters: 10
         backtrack_iters: 10
         backtrack_coef: 0.8

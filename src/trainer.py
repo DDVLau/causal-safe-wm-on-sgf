@@ -8,6 +8,7 @@ import gymnasium as gym
 from agent import AgentTrainer, AgentExplorationTrainer, AgentCPOTrainer
 from wm import WorldModelTrainer, WorldModelDecomposedTrainer
 from causal import PDAGTrainer
+from cdm import CausalDynamicModel
 
 
 class TrainerCausalWM:
@@ -30,8 +31,11 @@ class TrainerCausalWM:
         wm_every,
         cdm_every,
         agent_every,
+        pdag_every,
         log_every,
         eval_every,
+        cdm_start,
+        pdag_start,
         wm_trainer,
         cdm_trainer,
         agent_trainer,
@@ -56,9 +60,12 @@ class TrainerCausalWM:
         self.env_epsilon = env_epsilon
         self.wm_every = wm_every
         self.cdm_every = cdm_every
+        self.pdag_every = pdag_every
         self.agent_every = agent_every
         self.log_every = log_every
         self.eval_every = eval_every
+        self.cdm_start = cdm_start
+        self.pdag_start = pdag_start
         self.rng = rng
         self.autocast = autocast
 
@@ -92,16 +99,19 @@ class TrainerCausalWM:
         )
 
         self.pdag_trainer = PDAGTrainer(cdm, **cdm_trainer, total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_)
+        self.pdag_evaluator = CausalDynamicModel(wm.y_dim, env.action_space.shape[0])
 
         self.it = -1
         self.wm_it = 0
         self.agent_it = 0
         self.explore_agent_it = 0
         self.cdm_it = 0
+        self.pdag_it = 0
         self.wm_agg = utils.Aggregator(op="mean")
         self.agent_agg = utils.Aggregator(op="mean")
         self.explore_agent_agg = utils.Aggregator(op="mean")
         self.cdm_agg = utils.Aggregator(op="mean")
+        self.pdag_agg = utils.Aggregator(op="mean")
         self.train_time = 0.0
         self.wm_time = 0.0
         self.agent_time = 0.0
@@ -179,8 +189,9 @@ class TrainerCausalWM:
 
         # Train the cdm
         while self.cdm_it <= it:
-            cdm_metrics = self.pdag_trainer.train(start_y, wm, agent, self.explore_agent, it)
-            self.cdm_agg.append(cdm_metrics)
+            if self.cdm_start <= it:
+                cdm_metrics = self.pdag_trainer.train(start_y, wm, agent, self.explore_agent, it)
+                self.cdm_agg.append(cdm_metrics)
             self.cdm_it += self.cdm_every
 
         cdm_end_time = time.time()
@@ -196,6 +207,12 @@ class TrainerCausalWM:
             explore_agent_metrics = self.explore_agent_trainer.train(it, start_y)
             self.explore_agent_agg.append(explore_agent_metrics)
             self.explore_agent_it += self.agent_every
+
+        while self.pdag_it <= it:
+            if self.pdag_start <= it:
+                pdag_metrics = self.pdag_evaluator.compute(replay_buffer, wm, self.seed)
+                self.pdag_agg.append(pdag_metrics)
+            self.pdag_it += self.pdag_every
 
         end_time = time.time()  # (includes debug training time)
         self.train_time += end_time - start_time
@@ -228,8 +245,10 @@ class TrainerCausalWM:
             agent.eval()
             wm_eval_metrics = self.wm_trainer.evaluate(agent, self.seed)
             agent_eval_metrics = self.agent_trainer.evaluate(is_final, self.seed)
+            pdag_metrics = self.pdag_evaluator.evaluate()  # Visualising pdag
             metrics.update({f"eval/{k}": v for k, v in wm_eval_metrics.items()})
             metrics.update({f"eval/{k}": v for k, v in agent_eval_metrics.items()})
+            metrics.update({f"eval/{k}": v for k, v in pdag_metrics.items()})
             self.last_eval = it
 
         self.it = it

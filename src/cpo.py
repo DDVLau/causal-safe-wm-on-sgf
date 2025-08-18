@@ -1,3 +1,5 @@
+# CPO with style of reinforce loss
+# Reference: cpo.py from https://github.com/PKU-Alignment/omnisafe
 import torch
 import numpy as np
 from torch import nn
@@ -54,7 +56,6 @@ class CPOTrainer:
         return_norm,
         gamma,
         lmbda,
-        entropy_coef,
         target_decay,
         target_returns,
         target_coef,
@@ -75,10 +76,8 @@ class CPOTrainer:
 
         self.gamma = gamma
         self.lmbda = lmbda
-        self.entropy_coef = entropy_coef
         self.target_kl = cpo_params["target_kl"]
         self.cost_limit = cpo_params["cost_limit"]
-        self.damping_coef = cpo_params["damping_coef"]
         self.cg_iters = cpo_params["cg_iters"]
         self.backtrack_iters = cpo_params["backtrack_iters"]
         self.backtrack_coef = cpo_params["backtrack_coef"]
@@ -90,7 +89,6 @@ class CPOTrainer:
         self._optimize = compile_(self._optimize)
 
     def get_flat_params_from(self, model):
-        """Extract flattened parameters from model."""
         flat_params = []
         for _, param in model.named_parameters():
             if param.requires_grad:
@@ -101,7 +99,6 @@ class CPOTrainer:
         return torch.cat(flat_params)
 
     def set_param_values_to_model(self, model, vals):
-        """Set flattened parameters to model."""
         assert isinstance(vals, torch.Tensor)
         i = 0
         for _, param in model.named_parameters():
@@ -115,7 +112,6 @@ class CPOTrainer:
         assert i == len(vals), f"Lengths do not match: {i} vs. {len(vals)}"
 
     def get_flat_gradients_from(self, model):
-        """Extract flattened gradients from model."""
         grads = []
         for _, param in model.named_parameters():
             if param.requires_grad and param.grad is not None:
@@ -143,48 +139,9 @@ class CPOTrainer:
                 break
         return x
 
-    def project_lambda(self, value, low, high):
-        """Project value to [low, high] interval."""
-        return torch.clamp(value, low, high)
-
+    # Seems good until here
     def _optimize(self, x, a, target_v_r, target_v_c, ret_r, ret_c, adv_r, adv_c, seq_mask, it, ep_costs, xs):
-        """Optimized training step for CPO."""
-
         actor, reward_critic, cost_critic = self.policy.actor, self.policy.reward_critic, self.policy.cost_critic
-
-        # Store old policy parameters
-        old_params = self.get_flat_params_from(actor)
-
-        with self.autocast():
-            # Get old policy distribution for KL computation
-            old_stats = actor.get_stats(x, full_precision=True)
-
-            # Compute policy losses
-            actor_stats = actor.get_stats(x, full_precision=True)
-            reward_loss = actor.reinforce_loss(actor_stats, a, adv_r, seq_mask)
-            # minimal cost
-            cost_loss = -actor.reinforce_loss(actor_stats, a, adv_c, seq_mask)
-            entropy_loss = actor.entropy_loss(actor_stats, a, seq_mask)
-
-            # KL divergence
-            kl_div = torch.distributions.kl.kl_divergence(old_stats._dist, actor_stats._dist).mean()
-
-            metrics = {
-                "reward_loss": reward_loss,
-                "cost_loss": cost_loss,
-                "entropy_loss": entropy_loss,
-                "kl_div": kl_div,
-            }
-
-        # Compute gradients for reward objective
-        actor.zero_grad()
-        reward_loss.backward(retain_graph=True)
-        policy_grads = self.get_flat_gradients_from(actor)
-
-        # Compute gradients for cost constraint
-        actor.zero_grad()
-        cost_loss.backward(retain_graph=True)
-        cost_grads = self.get_flat_gradients_from(actor)
 
         # Fisher Vector Product function
         def fvp(params, fvp_obs):
@@ -199,30 +156,62 @@ class CPOTrainer:
             kl_v = (flat_kl_grad * params).sum()
             grads = torch.autograd.grad(kl_v, actor.parameters())
             flat_grad_grad_kl = torch.cat([grad.contiguous().view(-1) for grad in grads])
-            return flat_grad_grad_kl + params * self.damping_coef
+            return flat_grad_grad_kl + params * 0.1
+
+        # Store old policy parameters
+        old_params = self.get_flat_params_from(actor)
+
+        with self.autocast():
+            # Get old policy distribution for KL computation
+            old_stats = actor.get_stats(x, full_precision=True)
+
+            # Compute policy losses
+            actor_stats = actor.get_stats(x, full_precision=True)
+            reward_loss = actor.reinforce_loss(actor_stats, a, adv_r, seq_mask)
+            # minimal cost
+            cost_loss = -actor.reinforce_loss(actor_stats, a, adv_c, seq_mask)
+
+            # KL divergence
+            kl_div = torch.distributions.kl.kl_divergence(old_stats._dist, actor_stats._dist).mean()
+
+            metrics = {
+                "reward_loss": reward_loss.item(),
+                "cost_loss": cost_loss.item(),
+                "kl_div": kl_div.item(),
+            }
+
+        # Reward gradients
+        actor.zero_grad()
+        reward_loss.backward(retain_graph=True)
+        policy_grads = -self.get_flat_gradients_from(actor)  # Note this
+        loss_reward_before = reward_loss.item()
 
         # Solve for step direction using CPO update rule
-        step_dir = self.conjugate_gradients(fvp, x, -policy_grads, self.cg_iters)
-        sHs = 0.5 * torch.dot(step_dir, fvp(step_dir, x))
-        lm = torch.sqrt(2 * self.target_kl / sHs)
+        reward_step = self.conjugate_gradients(fvp, x, -policy_grads, self.cg_iters)
+        xHx = torch.dot(reward_step, fvp(reward_step, x))
+        lm = torch.sqrt(2 * self.target_kl / xHx)
+
+        # Cost gradients
+        actor.zero_grad()
+        cost_loss.backward(retain_graph=True)
+        cost_grads = self.get_flat_gradients_from(actor)
+        loss_cost_before = cost_loss.item()
 
         # Compute constraint violation and cost gradients norm
         constraint_violation = ep_costs - self.cost_limit
         ep_costs_mean = constraint_violation.mean()
         cost_gradient_norm = torch.dot(cost_grads, cost_grads)
 
-        # Optim case classification
         if cost_gradient_norm <= 1e-6 and ep_costs_mean < 0:
             A = torch.zeros(1, device=x.device)
             B = torch.zeros(1, device=x.device)
             optim_case = 4
         else:
-            # Compute quadratic approximation terms
             cost_step = self.conjugate_gradients(fvp, x, cost_grads, self.cg_iters)
             r = torch.dot(policy_grads, cost_step)
             s = torch.dot(cost_grads, cost_step)
 
-            A = sHs - r**2 / (s + 1e-8)
+            A = xHx - r**2 / (s + 1e-8)
             B = 2 * self.target_kl - ep_costs_mean**2 / (s + 1e-8)
 
             if ep_costs_mean < 0 and B < 0:
@@ -234,60 +223,74 @@ class CPOTrainer:
             else:
                 optim_case = 0
 
-        # Compute step direction based on optim case
         if optim_case in (3, 4):
-            # Unconstrained or degenerate case
-            final_step = step_dir / lm
+            lm = torch.sqrt(2 * self.target_kl / (xHx + 1e-8))
             nu_star = torch.zeros(1, device=x.device)
             lambda_star = 1 / (lm + 1e-8)
+            final_step = reward_step * lm
 
         elif optim_case in (1, 2):
             # Constrained cases - need quadratic optimization
-            lambda_a = torch.sqrt(A / B) if B > 0 else torch.zeros(1, device=x.device)
-            lambda_b = torch.sqrt(sHs / (2 * self.target_kl))
+            lambda_a = torch.sqrt(A / B)
+            lambda_b = torch.sqrt(xHx / (2 * self.target_kl))
 
             r_val = r.item()
             eps_cost = ep_costs_mean + 1e-8
 
             if ep_costs_mean < 0:
-                lambda_a_star = self.project_lambda(lambda_a, torch.tensor(0.0, device=lambda_a.device), torch.tensor(r_val / eps_cost, device=lambda_a.device))
-                lambda_b_star = self.project_lambda(lambda_b, torch.tensor(r_val / eps_cost, device=lambda_b.device), torch.tensor(float("inf"), device=lambda_b.device))
+                lambda_a_star = torch.clamp(lambda_a, torch.tensor(0.0, device=lambda_a.device), torch.tensor(r_val / eps_cost, device=lambda_a.device))
+                lambda_b_star = torch.clamp(lambda_b, torch.tensor(r_val / eps_cost, device=lambda_b.device), torch.tensor(float("inf"), device=lambda_b.device))
             else:
-                lambda_a_star = self.project_lambda(lambda_a, torch.tensor(r_val / eps_cost, device=lambda_a.device), torch.tensor(float("inf"), device=lambda_a.device))
-                lambda_b_star = self.project_lambda(lambda_b, torch.tensor(0.0, device=lambda_b.device), torch.tensor(r_val / eps_cost, device=lambda_b.device))
+                lambda_a_star = torch.clamp(lambda_a, torch.tensor(r_val / eps_cost, device=lambda_a.device), torch.tensor(float("inf"), device=lambda_a.device))
+                lambda_b_star = torch.clamp(lambda_b, torch.tensor(0.0, device=lambda_b.device), torch.tensor(r_val / eps_cost, device=lambda_b.device))
 
             # Choose optimal lambda
             f_a = -0.5 * (A / (lambda_a_star + 1e-8) + B * lambda_a_star) - r * ep_costs_mean / (s + 1e-8)
-            f_b = -0.5 * (sHs / (lambda_b_star + 1e-8) + 2 * self.target_kl * lambda_b_star)
+            f_b = -0.5 * (xHx / (lambda_b_star + 1e-8) + 2 * self.target_kl * lambda_b_star)
 
             lambda_star = lambda_a_star if f_a >= f_b else lambda_b_star
             nu_star = torch.clamp(lambda_star * ep_costs_mean - r, min=0) / (s + 1e-8)
 
-            final_step = (step_dir - nu_star * cost_step) / (lambda_star + 1e-8)
+            final_step = (reward_step - nu_star * cost_step) / (lambda_star + 1e-8)
 
         else:
-            # Infeasible case (optim_case = 0)
             nu_star = torch.sqrt(2 * self.target_kl / (s + 1e-8))
             lambda_star = torch.zeros(1, device=x.device)
             final_step = -nu_star * cost_step
 
-        # Backtracking line search
+        # Line search
         step_size = 1.0
-        for _ in range(self.backtrack_iters):
+        for step in range(self.backtrack_iters):
             new_params = old_params + step_size * final_step
             self.set_param_values_to_model(actor, new_params)
+            acceptance_step = step + 1
 
             with torch.no_grad():
+                try:
+                    new_stats = actor.get_stats(x)
+                    loss_r = actor.reinforce_loss(actor_stats, a, adv_r, seq_mask)
+                except ValueError:
+                    step_size *= self.backtrack_coef
+                    continue
+
                 new_stats = actor.get_stats(x)
+                loss_c = -actor.reinforce_loss(actor_stats, a, adv_c, seq_mask)
                 new_kl = torch.distributions.kl.kl_divergence(old_stats._dist, new_stats._dist).mean()
+                loss_reward_improve = loss_reward_before - loss_r.item()
+                loss_cost_diff = loss_c.item() - loss_cost_before
 
-                if new_kl <= self.target_kl:
+                if not torch.isfinite(new_kl):
+                    continue
+
+                if not (loss_reward_improve < 0 if optim_case > 1 else False) and not (loss_cost_diff > max(-ep_costs_mean, 0)) and not (new_kl > self.target_kl):
                     break
-
             step_size *= self.backtrack_coef
         else:
-            # Restore old parameters if no valid step found
-            self.set_param_values_to_model(actor, old_params)
+            final_step = torch.zeros_like(final_step)
+            acceptance_step = 0
+
+        new_params = old_params + step_size * final_step
+        self.set_param_values_to_model(actor, new_params)
 
         # Update critics
         batch_size = x.shape[0]
@@ -306,12 +309,10 @@ class CPOTrainer:
             {
                 "reward_critic_loss": reward_critic_loss,
                 "cost_critic_loss": cost_critic_loss,
-                "optim_case": optim_case,
                 "constraint_violation": ep_costs_mean.item(),
-                "lambda_star": lambda_star.item() if torch.is_tensor(lambda_star) else lambda_star,
-                "nu_star": nu_star.item() if torch.is_tensor(nu_star) else nu_star,
-                "A_value": A.item() if torch.is_tensor(A) else 0.0,
-                "B_value": B.item() if torch.is_tensor(B) else 0.0,
+                "lambda_star": lambda_star.item(),
+                "acceptance_step": acceptance_step,
+                "actor_grad_norm": torch.norm(final_step).mean().item(),
                 **reward_critic_norm,
                 **cost_critic_norm,
             }
@@ -371,8 +372,8 @@ class CPOTrainer:
                     "cost_values": vs_c.mean(),
                     "reward_advantages": adv_r.mean(),
                     "cost_advantages": adv_c.mean(),
-                    "reward_returns": rets_r.mean(),
-                    "cost_returns": rets_c.mean(),
+                    "r_returns": rets_r.mean(),
+                    "c_returns": rets_c.mean(),
                 }
 
         policy.train()
@@ -382,8 +383,9 @@ class CPOTrainer:
         return metrics
 
 
+# This class should looks good
 class CPOReturnNorm(nn.Module):
-    """Return normalization for CPO with separate reward and cost normalization."""
+    """Adopted and revised from class `ReturnNorm` in ac.py"""
 
     def __init__(self, low_percentile=5.0, high_percentile=95.0, decay=0.99, maximum=1.0, device=None):
         super().__init__()
@@ -427,8 +429,5 @@ class CPOReturnNorm(nn.Module):
         """Normalize cost returns."""
         return (ret_c - self.low_c) / self.inv_scale_c
 
-    def forward(self, ret_r, ret_c=None):
-        """Forward pass for compatibility."""
-        if ret_c is None:
-            return self.normalize_rewards(ret_r)
+    def forward(self, ret_r, ret_c):
         return self.normalize_rewards(ret_r), self.normalize_costs(ret_c)
