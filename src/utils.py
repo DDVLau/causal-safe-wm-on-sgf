@@ -519,8 +519,9 @@ class EpisodeCollector:
                     a.fill(0)
                     a[cont] = cont_a
                     next_o, next_r, next_term, next_trunc, info = vector_env.step(a)
+                    next_c = info.get("cost", 0)
                     next_done = next_term | next_trunc
-                    agg = step_fn(agg, cont, o, a, next_o, next_r, next_term, next_trunc)
+                    agg = step_fn(agg, cont, o, a, next_o, next_r, next_c, next_term, next_trunc)
                     just_done = next_done[cont]
                     cont = cont & ~next_done
                     o = next_o
@@ -535,17 +536,20 @@ class EpisodeCollector:
             n = cont.shape[0]
             return {
                 "episode_reward": np.zeros(n, dtype=np.float64),
+                "episode_costs": np.zeros(n, dtype=np.float64),
                 "episode_length": np.zeros(n, dtype=np.int64),
             }
 
-        def step(agg, cont, o, a, next_o, next_r, next_term, next_trunc):
+        def step(agg, cont, o, a, next_o, next_r, next_c, next_term, next_trunc):
             agg["episode_reward"][cont] += next_r[cont]
+            agg["episode_cost"][cont] += next_c[cont]
             agg["episode_length"][cont] += 1
             return agg
 
         def aggregate(aggs):
             return {
                 "episode_reward": np.concatenate([agg["episode_reward"] for agg in aggs]),
+                "episode_cost": np.concatenate([agg["episode_cost"] for agg in aggs]),
                 "episode_length": np.concatenate([agg["episode_length"] for agg in aggs]),
             }
 
