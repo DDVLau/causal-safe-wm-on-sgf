@@ -129,7 +129,7 @@ class CausalDynamicModel(ABC):
             + [node.name for node in self.nodes_dict["reward"]]
             + [node.name for node in self.nodes_dict["cost"]]
         )
-        return data.reshape(-1, data.shape[-1]).numpy().astype(np.float32), node_names
+        return data.reshape(-1, data.shape[-1]).cpu().numpy().astype(np.float32), node_names
 
     def _fci_compute(self, data: np.ndarray, node_names: Dict) -> int:
         """
