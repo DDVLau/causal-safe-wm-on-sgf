@@ -9,8 +9,9 @@ import logging
 import envs
 import utils
 from agent import Agent
-from ac import ActorCriticPolicy
-from cpo import CPOPolicy
+from policy.ac import ActorCriticPolicy
+from policy.ac_lagrange import ActorCriticLagrangePolicy
+from policy.cpo import CPOPolicy
 from wm import WorldModel, WorldModelDecomposed
 from causal import PDAGLearning
 from trainer import Trainer, TrainerCausalWM
@@ -74,8 +75,12 @@ def main():
     a_dim = env.action_space.n if hasattr(env.action_space, "n") else env.action_space.shape[0]
     if config.policy["algo"] == "ac":
         policy = ActorCriticPolicy(y_dim, a_dim, config.policy["actor"], config.policy["critic"], compile_=compile_, device=device)
+    elif config.policy["algo"] == "ac_lag":
+        policy = ActorCriticLagrangePolicy(y_dim, a_dim, config.policy["actor"], config.policy["reward_critic"], config.policy["cost_critic"], compile_=compile_, device=device)
     elif config.policy["algo"] == "cpo":
         policy = CPOPolicy(y_dim, a_dim, config.policy["actor"], config.policy["reward_critic"], config.policy["cost_critic"], compile_=compile_, device=device)
+    else:
+        raise NotImplementedError("algo not implemented")
     agent = Agent(policy, env.action_space, config.action_stack)
 
     # Exploration agent

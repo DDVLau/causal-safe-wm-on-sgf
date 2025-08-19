@@ -126,7 +126,7 @@ explore_policy:
     high: 20
 
 policy:
-  algo: cpo
+  algo: ac_lag
   actor:
     dims: 512-512
     norm: layer
@@ -171,7 +171,7 @@ trainer:
   pdag_every: 500 # debugging
   log_every: 100
   eval_every: 2500 # debugging
-  cdm_start: 0
+  cdm_start: 100000
   pdag_start: 2500 # debugging
 
   wm_trainer:
@@ -277,6 +277,7 @@ trainer:
       return_norm: true
       gamma: 0.997
       lmbda: 0.95
+      entropy_coef: 0.001 # not used
       target_decay: 0.98
       target_returns: false
       target_coef: 1.0
@@ -304,13 +305,28 @@ trainer:
         weight_decay: 0.0
         clip: 100.0
     
-      cpo_params:
-        target_kl: 0.01
-        batch_size: 128
+      # cpo_params:
+      #   target_kl: 0.01
+      #   batch_size: 128
+      #   cost_limit: 10
+      #   cg_iters: 10
+      #   backtrack_iters: 10
+      #   backtrack_coef: 0.8
+
+      lagrange_params:
+        optimizer:
+          name: lagrange
+          type: adam
+          base_lr: 0.035
+          end_lr: 0.035
+          warmup_its: 0
+          betas: [ 0.9, 0.999 ]
+          eps: 1e-5
+          weight_decay: 0.0
+          clip: 100.0
         cost_limit: 10
-        cg_iters: 10
-        backtrack_iters: 10
-        backtrack_coef: 0.8
+        lagrangian_multiplier_init: 0.001
+        lagrangian_upper_bound: 10
 
   # Copy from agent_trainer
   explore_agent_trainer:
