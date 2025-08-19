@@ -8,7 +8,7 @@ import utils
 
 
 class ActorCriticPolicy(nn.Module):
-    """Actor-Critic policy for discrete action spaces."""
+    """Actor-Critic policy for continuous/discrete action spaces."""
 
     def __init__(self, x_dim, a_dim, actor, critic, *, compile_, device=None):
         super().__init__()
@@ -26,7 +26,7 @@ class ActorCriticPolicy(nn.Module):
 
 
 class Actor(nn.Module):
-    """Actor for discrete action spaces."""
+    """Actor for continuous/discrete action spaces."""
 
     def __init__(
         self,
@@ -96,7 +96,7 @@ class Actor(nn.Module):
 
         dtype = log_probs.dtype
         adv, mask = adv.type(dtype), mask.type(dtype)
-        
+
         reinforce_loss = mask.mean(-(adv * log_probs))
         return reinforce_loss
 
@@ -173,7 +173,6 @@ class ActorCriticTrainer:
         autocast,
         compile_,
     ):
-
         self.policy = policy
         self.reward_act = nets.activation(reward_act)
         self.return_norm = ReturnNorm(device=utils.device(policy)) if return_norm else None
@@ -214,9 +213,9 @@ class ActorCriticTrainer:
             actor_loss = reinforce_loss + self.entropy_coef * entropy_loss
 
             metrics = {
-                'reinforce_loss': reinforce_loss,
-                'entropy_loss': entropy_loss,
-                'actor_loss': actor_loss,
+                "reinforce_loss": reinforce_loss,
+                "entropy_loss": entropy_loss,
+                "actor_loss": actor_loss,
             }
 
         batch_size = x.shape[0]
@@ -231,14 +230,14 @@ class ActorCriticTrainer:
                 critic_loss = return_loss + self.target_coef * target_loss
                 metrics.update(
                     {
-                        'return_loss': return_loss,
-                        'target_loss': target_loss,
-                        'critic_loss': critic_loss,
+                        "return_loss": return_loss,
+                        "target_loss": target_loss,
+                        "critic_loss": critic_loss,
                     }
                 )
             else:
                 critic_loss = return_loss
-                metrics['critic_loss'] = critic_loss
+                metrics["critic_loss"] = critic_loss
 
         critic_norm = self.critic_optimizer.step(critic_loss, batch_size, it)
         metrics.update({**actor_norm, **critic_norm})
@@ -285,11 +284,11 @@ class ActorCriticTrainer:
                     target_v = utils.flatten_seq(target_vs)
 
                 batch_metrics = {
-                    'rewards': next_rs.mean(),
-                    'terminals': next_terms.float().mean(),
-                    'values': vs.mean(),
-                    'advantages': adv.mean(),
-                    'returns': rets.mean(),
+                    "rewards": next_rs.mean(),
+                    "terminals": next_terms.float().mean(),
+                    "values": vs.mean(),
+                    "advantages": adv.mean(),
+                    "returns": rets.mean(),
                 }
 
         policy.train()
@@ -306,15 +305,14 @@ class ActorCriticTrainer:
 
 # adopted from https://github.com/danijar/dreamerv3/blob/main/dreamerv3/jaxutils.py
 class ReturnNorm(nn.Module):
-
     def __init__(self, low_percentile=5.0, high_percentile=95.0, decay=0.99, maximum=1.0, device=None):
         super().__init__()
-        self.register_buffer('inv_max', torch.tensor(1 / maximum, device=device))
-        self.register_buffer('q', torch.tensor([low_percentile / 100, high_percentile / 100], device=device))
-        self.register_buffer('decay', torch.tensor(decay, device=device))
-        self.register_buffer('low', torch.zeros(1, device=device))
-        self.register_buffer('high', torch.zeros(1, device=device))
-        self.register_buffer('inv_scale', torch.zeros(1, device=device))
+        self.register_buffer("inv_max", torch.tensor(1 / maximum, device=device))
+        self.register_buffer("q", torch.tensor([low_percentile / 100, high_percentile / 100], device=device))
+        self.register_buffer("decay", torch.tensor(decay, device=device))
+        self.register_buffer("low", torch.zeros(1, device=device))
+        self.register_buffer("high", torch.zeros(1, device=device))
+        self.register_buffer("inv_scale", torch.zeros(1, device=device))
 
     def update(self, ret):
         ret = ret.type(torch.float32)
@@ -326,3 +324,52 @@ class ReturnNorm(nn.Module):
 
     def forward(self, ret):
         return (ret - self.low) / self.inv_scale
+
+
+class SafeReturnNorm(nn.Module):
+    """Adopted and revised from class `ReturnNorm`"""
+
+    def __init__(self, low_percentile=5.0, high_percentile=95.0, decay=0.99, maximum=1.0, device=None):
+        super().__init__()
+        self.register_buffer("inv_max", torch.tensor(1 / maximum, device=device))
+        self.register_buffer("q", torch.tensor([low_percentile / 100, high_percentile / 100], device=device))
+        self.register_buffer("decay", torch.tensor(decay, device=device))
+
+        # Reward normalization parameters
+        self.register_buffer("low_r", torch.zeros(1, device=device))
+        self.register_buffer("high_r", torch.zeros(1, device=device))
+        self.register_buffer("inv_scale_r", torch.zeros(1, device=device))
+
+        # Cost normalization parameters
+        self.register_buffer("low_c", torch.zeros(1, device=device))
+        self.register_buffer("high_c", torch.zeros(1, device=device))
+        self.register_buffer("inv_scale_c", torch.zeros(1, device=device))
+
+    def update(self, ret_r, ret_c):
+        """Update normalization statistics for both rewards and costs."""
+        ret_r = ret_r.type(torch.float32)
+        ret_c = ret_c.type(torch.float32)
+
+        # Update reward normalization
+        ret_low_r, ret_high_r = torch.quantile(ret_r.flatten(), self.q)
+        decay = self.decay
+        self.low_r.data = decay * self.low_r + (1 - decay) * ret_low_r
+        self.high_r.data = decay * self.high_r + (1 - decay) * ret_high_r
+        self.inv_scale_r.data = torch.maximum(self.inv_max, self.high_r - self.low_r)
+
+        # Update cost normalization
+        ret_low_c, ret_high_c = torch.quantile(ret_c.flatten(), self.q)
+        self.low_c.data = decay * self.low_c + (1 - decay) * ret_low_c
+        self.high_c.data = decay * self.high_c + (1 - decay) * ret_high_c
+        self.inv_scale_c.data = torch.maximum(self.inv_max, self.high_c - self.low_c)
+
+    def normalize_rewards(self, ret_r):
+        """Normalize reward returns."""
+        return (ret_r - self.low_r) / self.inv_scale_r
+
+    def normalize_costs(self, ret_c):
+        """Normalize cost returns."""
+        return (ret_c - self.low_c) / self.inv_scale_c
+
+    def forward(self, ret_r, ret_c):
+        return self.normalize_rewards(ret_r), self.normalize_costs(ret_c)

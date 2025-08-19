@@ -1,12 +1,12 @@
 # CPO with style of reinforce loss
-# Reference: cpo.py from https://github.com/PKU-Alignment/omnisafe
+# Reference: https://github.com/PKU-Alignment/omnisafe/blob/main/omnisafe/algorithms/on_policy/second_order/cpo.py
 import torch
 import numpy as np
 from torch import nn
 
 import nets
 import utils
-from ac import Actor
+from policy.ac import Actor, SafeReturnNorm
 
 
 class CPOPolicy(nn.Module):
@@ -56,10 +56,10 @@ class CPOTrainer:
         return_norm,
         gamma,
         lmbda,
-        target_decay,
-        target_returns,
-        target_coef,
-        target_every,
+        target_decay,  # not used
+        target_returns,  # not used
+        target_coef,  # not used
+        target_every,  # not used
         *,
         total_its,
         rng,
@@ -68,7 +68,7 @@ class CPOTrainer:
     ):
         self.policy = policy
         self.reward_act = nets.activation(reward_act)
-        self.return_norm = CPOReturnNorm(device=utils.device(policy)) if return_norm else None
+        self.return_norm = SafeReturnNorm(device=utils.device(policy)) if return_norm else None
 
         self.actor_optimizer = nets.Optimizer(policy.actor, **actor_optimizer, total_its=total_its, autocast=autocast)
         self.reward_critic_optimizer = nets.Optimizer(policy.reward_critic, **critic_optimizer, total_its=total_its, autocast=autocast)
@@ -238,11 +238,11 @@ class CPOTrainer:
             eps_cost = ep_costs_mean + 1e-8
 
             if ep_costs_mean < 0:
-                lambda_a_star = torch.clamp(lambda_a, torch.tensor(0.0, device=lambda_a.device), torch.tensor(r_val / eps_cost, device=lambda_a.device))
-                lambda_b_star = torch.clamp(lambda_b, torch.tensor(r_val / eps_cost, device=lambda_b.device), torch.tensor(float("inf"), device=lambda_b.device))
+                lambda_a_star = torch.clamp(lambda_a, 0.0, r_val / eps_cost)
+                lambda_b_star = torch.clamp(lambda_b, r_val / eps_cost, float("inf"))
             else:
-                lambda_a_star = torch.clamp(lambda_a, torch.tensor(r_val / eps_cost, device=lambda_a.device), torch.tensor(float("inf"), device=lambda_a.device))
-                lambda_b_star = torch.clamp(lambda_b, torch.tensor(0.0, device=lambda_b.device), torch.tensor(r_val / eps_cost, device=lambda_b.device))
+                lambda_a_star = torch.clamp(lambda_a, r_val / eps_cost, float("inf"))
+                lambda_b_star = torch.clamp(lambda_b, 0.0, r_val / eps_cost)
 
             # Choose optimal lambda
             f_a = -0.5 * (A / (lambda_a_star + 1e-8) + B * lambda_a_star) - r * ep_costs_mean / (s + 1e-8)
@@ -381,53 +381,3 @@ class CPOTrainer:
 
         metrics.update(batch_metrics)
         return metrics
-
-
-# This class should looks good
-class CPOReturnNorm(nn.Module):
-    """Adopted and revised from class `ReturnNorm` in ac.py"""
-
-    def __init__(self, low_percentile=5.0, high_percentile=95.0, decay=0.99, maximum=1.0, device=None):
-        super().__init__()
-        self.register_buffer("inv_max", torch.tensor(1 / maximum, device=device))
-        self.register_buffer("q", torch.tensor([low_percentile / 100, high_percentile / 100], device=device))
-        self.register_buffer("decay", torch.tensor(decay, device=device))
-
-        # Reward normalization parameters
-        self.register_buffer("low_r", torch.zeros(1, device=device))
-        self.register_buffer("high_r", torch.zeros(1, device=device))
-        self.register_buffer("inv_scale_r", torch.zeros(1, device=device))
-
-        # Cost normalization parameters
-        self.register_buffer("low_c", torch.zeros(1, device=device))
-        self.register_buffer("high_c", torch.zeros(1, device=device))
-        self.register_buffer("inv_scale_c", torch.zeros(1, device=device))
-
-    def update(self, ret_r, ret_c):
-        """Update normalization statistics for both rewards and costs."""
-        ret_r = ret_r.type(torch.float32)
-        ret_c = ret_c.type(torch.float32)
-
-        # Update reward normalization
-        ret_low_r, ret_high_r = torch.quantile(ret_r.flatten(), self.q)
-        decay = self.decay
-        self.low_r.data = decay * self.low_r + (1 - decay) * ret_low_r
-        self.high_r.data = decay * self.high_r + (1 - decay) * ret_high_r
-        self.inv_scale_r.data = torch.maximum(self.inv_max, self.high_r - self.low_r)
-
-        # Update cost normalization
-        ret_low_c, ret_high_c = torch.quantile(ret_c.flatten(), self.q)
-        self.low_c.data = decay * self.low_c + (1 - decay) * ret_low_c
-        self.high_c.data = decay * self.high_c + (1 - decay) * ret_high_c
-        self.inv_scale_c.data = torch.maximum(self.inv_max, self.high_c - self.low_c)
-
-    def normalize_rewards(self, ret_r):
-        """Normalize reward returns."""
-        return (ret_r - self.low_r) / self.inv_scale_r
-
-    def normalize_costs(self, ret_c):
-        """Normalize cost returns."""
-        return (ret_c - self.low_c) / self.inv_scale_c
-
-    def forward(self, ret_r, ret_c):
-        return self.normalize_rewards(ret_r), self.normalize_costs(ret_c)
