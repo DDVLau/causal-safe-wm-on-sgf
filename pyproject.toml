@@ -10,6 +10,9 @@ dependencies = [
     "numpy<2.0.0",
     "ruamel-yaml>=0.18.14",
     "wandb>=0.21.0",
+    "moviepy>=2.2.1",
+    "matplotlib>=3.10.3",
+    "causal-learn>=0.1.4.3",
 ]
 [dependency-groups]
 safetygym = [
@@ -56,3 +59,6 @@ explicit = true
 name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
+
+[tool.ruff]
+line-length = 180

@@ -4,19 +4,13 @@ from pathlib import Path
 import ruamel.yaml as yaml
 import torch
 import wandb
-import logging
 
 import envs
 import utils
 from agent import Agent
 from policy.ac import ActorCriticPolicy
-from policy.ac_lagrange import ActorCriticLagrangePolicy
-from policy.cpo import CPOPolicy
-from wm import WorldModel, WorldModelDecomposed
-from causal import PDAGLearning
-from trainer import Trainer, TrainerCausalWM
-
-logging.basicConfig(level=logging.DEBUG)
+from wm import WorldModel
+from trainer import Trainer
 
 
 def main():
@@ -35,7 +29,6 @@ def main():
     parser.add_argument("--amp", default=False, action="store_true", help="Whether to use automatic mixed precision")
     parser.add_argument("--compile", default=False, action="store_true", help="Whether to use torch.compile")
     parser.add_argument("--save", default=False, action="store_true", help="Whether to save the models after training")
-    parser.add_argument("--use_decom_wm", type=bool, default=True, help="Whether to use the decomposed world model")
     args = parser.parse_args()
 
     # Load the configuration file
@@ -71,78 +64,31 @@ def main():
     rng = utils.seed_everything(seed)
     env = envs.make_env(config.game, make=True, env_config=config.env)
 
-    y_dim = config.wm["y_dim"] if type(config.wm["y_dim"]) is not dict else sum(config.wm["y_dim"].values()) * 2
+    y_dim = config.wm["y_dim"]
     a_dim = env.action_space.n if hasattr(env.action_space, "n") else env.action_space.shape[0]
-    if config.policy["algo"] == "ac":
-        policy = ActorCriticPolicy(y_dim, a_dim, config.policy["actor"], config.policy["critic"], compile_=compile_, device=device)
-    elif config.policy["algo"] == "ac_lag":
-        policy = ActorCriticLagrangePolicy(y_dim, a_dim, config.policy["actor"], config.policy["reward_critic"], config.policy["cost_critic"], compile_=compile_, device=device)
-    elif config.policy["algo"] == "cpo":
-        policy = CPOPolicy(y_dim, a_dim, config.policy["actor"], config.policy["reward_critic"], config.policy["cost_critic"], compile_=compile_, device=device)
-    else:
-        raise NotImplementedError("algo not implemented")
+    policy = ActorCriticPolicy(y_dim, a_dim, config.policy["actor"], config.policy["critic"], compile_=compile_, device=device)
     agent = Agent(policy, env.action_space, config.action_stack)
 
-    # Exploration agent
-    explore_policy = ActorCriticPolicy(y_dim, a_dim, config.explore_policy["actor"], config.explore_policy["critic"], compile_=compile_, device=device)
-    explore_agent = Agent(explore_policy, env.action_space, config.action_stack)
-
-    wm = (
-        WorldModel(env.observation_space, agent.stacked_action_space, **config.wm, compile_=compile_, device=device)
-        if not args.use_decom_wm
-        else WorldModelDecomposed(env.observation_space, agent.stacked_action_space, **config.wm, compile_=compile_, device=device)
-    )
-
-    # Causal dynamics model
-    cdm = (
-        PDAGLearning(observation_space=env.observation_space, single_action_space=agent.single_action_space, y_dim=y_dim, compile_=compile_, device=device)
-        if args.use_decom_wm
-        else None
-    )
+    wm = WorldModel(env.observation_space, agent.stacked_action_space, **config.wm, compile_=compile_, device=device)
 
     # Initialize the trainer
-    trainer = (
-        Trainer(
-            env,
-            config.game,
-            wm,
-            agent,
-            seed,
-            **config.trainer,
-            use_decom_wm=args.use_decom_wm,
-            wm_eval=config.wm_eval,
-            agent_eval=config.agent_eval,
-            buffer_device=buffer_device,
-            rng=rng,
-            autocast=autocast,
-            compile_=compile_,
-        )
-        if not args.use_decom_wm
-        else TrainerCausalWM(
-            env,
-            config.game,
-            config.policy["algo"],
-            wm,
-            cdm,
-            agent,
-            explore_agent,
-            seed,
-            **config.trainer,
-            use_decom_wm=args.use_decom_wm,
-            wm_eval=config.wm_eval,
-            agent_eval=config.agent_eval,
-            buffer_device=buffer_device,
-            rng=rng,
-            autocast=autocast,
-            compile_=compile_,
-        )
+    trainer = Trainer(
+        env,
+        config.game,
+        wm,
+        agent,
+        seed,
+        **config.trainer,
+        wm_eval=config.wm_eval,
+        agent_eval=config.agent_eval,
+        buffer_device=buffer_device,
+        rng=rng,
+        autocast=autocast,
+        compile_=compile_,
     )
 
     print(f"Starting... (seed: {seed})")
     print(f"World Model # params: {utils.count_params(wm)}")
-    for attr in dir(wm):
-        if any(attr.endswith(suffix) for suffix in ("projector", "predictor", "encoder", "decoder")):
-            print(f"  {attr:<20}: {utils.count_params(getattr(wm, attr))}")
     print(f"Agent # params: {utils.count_params(agent)}")
 
     # Train the agent and world model
