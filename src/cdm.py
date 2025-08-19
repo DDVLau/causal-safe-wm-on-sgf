@@ -1,11 +1,10 @@
 import logging
 import os
 from abc import ABC
-from typing import Any, Dict, List, Optional, Tuple, Set, Generator
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
-import networkx as nx
 import wandb
 
 from replay import ReplayBufferSafeRL

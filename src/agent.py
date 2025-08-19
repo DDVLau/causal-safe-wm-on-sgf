@@ -228,6 +228,7 @@ class AgentTrainer:
 
         metrics = {
             **aggregate(stats["episode_reward"], "episode_reward"),
+            **aggregate(stats["episode_cost"], "episode_cost"),
             **aggregate(stats["episode_length"], "episode_length"),
         }
         return metrics
