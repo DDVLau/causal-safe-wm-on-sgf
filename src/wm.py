@@ -205,9 +205,6 @@ class WorldModelDecomposed(nn.Module):
         terminal_stats = self.terminal_predictor.get_stats(inp, full_precision=True)
         terminal_loss = self.terminal_predictor.loss(terminal_stats, next_term)
 
-        inputs = self._get_mist_inputs(yt, flat_a, next_yt, next_r, next_c)
-        mist_outer_loss = self.mi_outer_loss(inputs, self.mi_coef)
-
         representation_loss = (
             self.sim_coef * sim_loss
             + self.var_coef * var_loss
@@ -215,7 +212,6 @@ class WorldModelDecomposed(nn.Module):
             + self.reward_coef * reward_loss
             + self.cost_coef * cost_loss
             + self.terminal_coef * terminal_loss
-            + mist_outer_loss
         )
 
         pred_r = self.reward_predictor.predict(reward_stats)
@@ -231,25 +227,28 @@ class WorldModelDecomposed(nn.Module):
             "cost_loss": cost_loss,
             "terminal_loss": terminal_loss,
             "representation_loss": representation_loss,
-            "mist_outer_loss": mist_outer_loss,
             "z_std": ((std1 + std2) / 2).mean(),
             "reward_mae": (pred_r - next_r).abs().mean(),
             "terminal_acc": (pred_term == next_term).float().mean(),
         }
         return representation_loss, metrics, yt, next_yt
 
-    def transition_loss(self, y, flat_a, next_y):
+    def transition_loss(self, y, flat_a, next_y, next_r, next_c):
         """Compute the transition loss."""
         inp = torch.cat([y, flat_a], -1)
         # skip connection
         pred_y = y + self.transition_predictor(inp)
         transition_loss = self.transition_predictor.loss(pred_y, next_y)
 
+        inputs = self._get_mist_inputs(y, flat_a, pred_y, next_r, next_c)
+        mist_outer_loss = self.mi_outer_loss(inputs, self.mi_coef)
+
         metrics = {
             "transition_loss": transition_loss,
             "y_mse": F.mse_loss(y, next_y),
             "y_norm": (torch.linalg.vector_norm(y, dim=-1).mean() + torch.linalg.vector_norm(next_y, dim=-1).mean()) / 2,
             "transition_mae": F.l1_loss(pred_y, next_y),
+            "mist_outer_loss": mist_outer_loss,
         }
         return transition_loss, metrics
 
@@ -270,8 +269,9 @@ class WorldModelDecomposed(nn.Module):
     def mi_outer_loss(self, inputs, mi_coef):
         assert len(inputs) == 4
         loss = -(
-            mi_coef["reward"] * self.mist_estimator["reward"](inputs[0][0], inputs[0][1]) - mi_coef["reward_bar"] * self.mist_estimator["reward_bar"](inputs[1][0], inputs[1][1])
-        ) - (mi_coef["cost"] * self.mist_estimator["cost"](inputs[2][0], inputs[2][1]) - mi_coef["cost_bar"] * self.mist_estimator["cost_bar"](inputs[3][0], inputs[3][1]))
+            (mi_coef["reward"] * self.mist_estimator["reward"](inputs[0][0], inputs[0][1]) - mi_coef["reward_bar"] * self.mist_estimator["reward_bar"](inputs[1][0], inputs[1][1]))
+            - (mi_coef["cost"] * self.mist_estimator["cost"](inputs[2][0], inputs[2][1]) - mi_coef["cost_bar"] * self.mist_estimator["cost_bar"](inputs[3][0], inputs[3][1]))
+        )
         return loss
 
     def _get_predictor_inputs(self, y, flat_a, next_y):
@@ -588,7 +588,7 @@ class WorldModelDecomposedTrainer:
                     y = wm.encoder(o)
                     next_y = wm.encoder(next_o)
 
-            transition_loss, transition_metrics = wm.transition_loss(y, flat_a, next_y)
+            transition_loss, transition_metrics = wm.transition_loss(y, flat_a, next_y, next_r, next_c)  # Slightly changed input
 
         # Compute the MIST loss
         with self.autocast():

@@ -1,0 +1,343 @@
+# For continuous envs (safety-gymnasium) with decomposed world model + unconstrained policy.
+
+action_stack: 4
+
+env:
+  camera_name: vision
+  width: 64
+  height: 64
+  max_frames: 500
+  frame_stack: 4
+  action_repeat: 2
+
+wm:
+  y_dim:
+    reward: 256
+    cost: 256
+  z_dim: 2048
+  mist_hidden_dim: 64
+
+  encoder:
+    channels: 64-128-256-64
+    kernels: 4-4-4-3
+    strides: 2-2-2-1
+    paddings: 1-1-1-1
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_bias: true
+    out_norm: true
+
+  projector:
+    dims: 2048-2048
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_bias: false
+    out_norm: false
+    objective: l2
+
+  predictor:
+    dims: 2048-2048
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_bias: true
+    out_norm: false
+    objective: l2
+
+  transition_predictor:
+    dims: 1024-1024-1024-1024-1024
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_bias: true
+    out_norm: false
+    objective: l2
+
+  reward_predictor:
+    dims: 1024-1024
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_init: zeros
+    dist: twohot
+    pred: mean
+    symlog: true
+    num_bins: 255
+    low: -15
+    high: 15
+
+  cost_predictor:
+    dims: 1024-1024
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_init: zeros
+    dist: twohot
+    pred: mean
+    symlog: true
+    num_bins: 255
+    low: -15
+    high: 15
+
+  terminal_predictor:
+    dims: 1024-1024
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_init: zeros
+    dist: bernoulli
+    pred: mode
+
+  contrastive: false
+  sim_coef: 12.5
+  var_coef: 25.0
+  cov_coef: 1.0
+  reward_coef: 1.0
+  cost_coef: 1.0
+  terminal_coef: 1.0
+  mi_coef:
+    reward: 1.0
+    cost: 1.0
+    reward_bar: 0.1
+    cost_bar: 0.1
+
+explore_policy:
+  algo: ac
+  actor:
+    dims: 512-512
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_init: zeros
+
+  critic:
+    dims: 512-512
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_init: zeros
+    dist: twohot
+    pred: mean
+    symlog: true
+    num_bins: 255
+    low: -20
+    high: 20
+
+policy:
+  algo: ac
+  actor:
+    dims: 512-512
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_init: zeros
+
+  critic:
+    dims: 512-512
+    norm: layer
+    act: silu
+    init: truncated_normal
+    out_init: zeros
+    dist: twohot
+    pred: mean
+    symlog: true
+    num_bins: 255
+    low: -20
+    high: 20
+
+trainer:
+  env_steps: 100000
+  init_steps: 5000
+  env_epsilon: 0.01
+  env_temperature: 1.0
+  wm_every: 2
+  cdm_every: 50 # debugging
+  agent_every: 2
+  pdag_every: 500 # debugging
+  log_every: 100
+  eval_every: 2500 # debugging
+  cdm_start: 100000
+  pdag_start: 2500 # debugging
+
+  wm_trainer:
+    batch_size: 1024
+
+    augmentation:
+      - { type: random_shift, shift: 3 }
+      - { type: random_intensity, scale: 0.05 }
+
+    representation_optimizer:
+      name: representation
+      type: adamw
+      base_lr: 1.5e-4
+      end_lr: 1.5e-4
+      warmup_its: 5000
+      betas: [ 0.9, 0.999 ]
+      eps: 1e-8
+      weight_decay: 0.001
+      clip: 10.0
+
+    transition_optimizer:
+      name: transition
+      type: adamw
+      base_lr: 3e-4
+      end_lr: 3e-4
+      warmup_its: 5000
+      betas: [ 0.9, 0.999 ]
+      eps: 1e-8
+      weight_decay: 0.001
+      clip: 500.0
+    
+    mist_optimizer:
+      name: mist
+      type: adamw
+      base_lr: 1e-4
+      end_lr: 1e-4
+      warmup_its: 5000
+      betas: [ 0.9, 0.999 ]
+      eps: 1e-8
+      weight_decay: 0.001
+      clip: 10.0
+
+    debug:
+      dream_horizon: 30
+      # DreamerV3 decoder
+      decoder:
+        in_res: 4
+        channels: 256-128-64-32
+        kernels: 4-4-4-4
+        strides: 2-2-2-2
+        paddings: 1-1-1-1
+        norm: { type: layer, eps: 1e-3 }
+        act: silu
+        init: truncated_normal
+      optimizer:
+        name: decoder
+        type: adamw
+        base_lr: 2.5e-5
+        end_lr: 2.5e-5
+        warmup_its: 0
+        betas: [ 0.9, 0.999 ]
+        eps: 1e-5
+        weight_decay: 0.0
+        clip: 1000.0
+
+  cdm_trainer:
+    propensity_coef: 1.0
+    beta: 1.0
+    constrain_coef: 0.1
+    C: 0.001
+    batch_size: 512
+    num_epochs: 3
+
+    cdm_optimizer:
+      name: cdm
+      type: adamw
+      base_lr: 1e-4
+      end_lr: 1e-4
+      warmup_its: 5000
+      betas: [ 0.9, 0.999 ]
+      eps: 1e-8
+      weight_decay: 0.001
+      clip: 10.0
+
+  agent_trainer:
+    batch_size: 2048 # debugging
+    horizon: 10
+
+    eval_env:
+      camera_name: vision
+      width: 64
+      height: 64
+      max_frames: 1000
+      frame_stack: 4
+      action_repeat: 2
+    eval_num_parallel: 1
+    eval_temperature: 0.5
+    eval_epsilon: 0.0
+    eval_episodes: 20 # debugging
+    final_eval_episodes: 100
+    policy_trainer:
+      reward_act: none
+      return_norm: true
+      gamma: 0.997
+      lmbda: 0.95
+      entropy_coef: 0.001 # not used
+      target_decay: 0.98
+      target_returns: false
+      target_coef: 1.0
+      target_every: 1
+
+      actor_optimizer:
+        name: actor
+        type: adamw
+        base_lr: 2e-7
+        end_lr: 2e-7
+        warmup_its: 0
+        betas: [ 0.9, 0.999 ]
+        eps: 1e-5
+        weight_decay: 0.0
+        clip: 100.0
+
+      critic_optimizer:
+        name: critic
+        type: adamw
+        base_lr: 2e-7
+        end_lr: 2e-7
+        warmup_its: 0
+        betas: [ 0.9, 0.999 ]
+        eps: 1e-5
+        weight_decay: 0.0
+        clip: 100.0
+
+  # Copy from agent_trainer
+  explore_agent_trainer:
+    batch_size: 2048 # debugging
+    horizon: 10
+
+    eval_env:
+      camera_name: vision
+      width: 64
+      height: 64
+      max_frames: 1000
+      frame_stack: 4
+      action_repeat: 2
+    eval_num_parallel: 1
+    eval_temperature: 0.5
+    eval_epsilon: 0.0
+    eval_episodes: 20 # debugging
+    final_eval_episodes: 100
+    policy_trainer:
+      reward_act: none
+      return_norm: true
+      gamma: 0.997
+      lmbda: 0.95
+      entropy_coef: 0.001
+      target_decay: 0.98
+      target_returns: false
+      target_coef: 1.0
+      target_every: 1
+
+      actor_optimizer:
+        name: actor
+        type: adamw
+        base_lr: 2e-7
+        end_lr: 2e-7
+        warmup_its: 0
+        betas: [ 0.9, 0.999 ]
+        eps: 1e-5
+        weight_decay: 0.0
+        clip: 100.0
+
+      critic_optimizer:
+        name: critic
+        type: adamw
+        base_lr: 2e-7
+        end_lr: 2e-7
+        warmup_its: 0
+        betas: [ 0.9, 0.999 ]
+        eps: 1e-5
+        weight_decay: 0.0
+        clip: 100.0
