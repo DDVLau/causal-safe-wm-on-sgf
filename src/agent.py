@@ -74,7 +74,7 @@ class Agent(nn.Module):
         next_state, stacked_a = self._advance_state(state, cont_mask, a)
         return a, stacked_a, next_state
 
-    def act(self, state, cont_mask, x, temperature=1):
+    def act(self, state, cont_mask, x):
         a = self.policy(x)
         next_state, stacked_a = self._advance_state(state, cont_mask, a)
         return a, stacked_a, next_state
@@ -212,7 +212,7 @@ class AgentTrainer:
                 if rng.random() < self.eval_epsilon:
                     a, _, state = agent.act_randomly(state, cont_mask, rng)
                 else:
-                    a, _, state = agent.act(state, cont_mask, y, temperature=self.eval_temperature)
+                    a, _, state = agent.act(state, cont_mask, y)
                 a_cpu = a.cpu().numpy()
                 return a_cpu, state
 

@@ -126,7 +126,7 @@ explore_policy:
     high: 20
 
 policy:
-  algo: ac_lag
+  algo: ac
   actor:
     dims: 512-512
     norm: layer
@@ -134,7 +134,7 @@ policy:
     init: truncated_normal
     out_init: zeros
 
-  reward_critic:
+  critic:
     dims: 512-512
     norm: layer
     act: silu
@@ -147,23 +147,40 @@ policy:
     low: -20
     high: 20
 
-  cost_critic:
-    dims: 512-512
-    norm: layer
-    act: silu
-    init: truncated_normal
-    out_init: zeros
-    dist: twohot
-    pred: mean
-    symlog: true
-    num_bins: 255
-    low: -20
-    high: 20
+  # reward_critic:
+  #   dims: 512-512
+  #   norm: layer
+  #   act: silu
+  #   init: truncated_normal
+  #   out_init: zeros
+  #   dist: twohot
+  #   pred: mean
+  #   symlog: true
+  #   num_bins: 255
+  #   low: -20
+  #   high: 20
+
+  # cost_critic:
+  #   dims: 512-512
+  #   norm: layer
+  #   act: silu
+  #   init: truncated_normal
+  #   out_init: zeros
+  #   dist: twohot
+  #   pred: mean
+  #   symlog: true
+  #   num_bins: 255
+  #   low: -20
+  #   high: 20
 
 trainer:
   env_steps: 100000
   init_steps: 5000
-  env_epsilon: 0.01
+  # env_explore_strategy: uniform
+  # env_epsilon: 0.01
+  env_explore_strategy: causal
+  env_explore_ratio: 0.2
+  env_epsilon: 0.0
   env_temperature: 1.0
   wm_every: 2
   cdm_every: 50 # debugging
@@ -313,20 +330,20 @@ trainer:
       #   backtrack_iters: 10
       #   backtrack_coef: 0.8
 
-      lagrange_params:
-        optimizer:
-          name: lagrange
-          type: adam
-          base_lr: 0.035
-          end_lr: 0.035
-          warmup_its: 0
-          betas: [ 0.9, 0.999 ]
-          eps: 1e-5
-          weight_decay: 0.0
-          clip: 100.0
-        cost_limit: 10
-        lagrangian_multiplier_init: 0.001
-        lagrangian_upper_bound: 10
+      # lagrange_params:
+      #   optimizer:
+      #     name: lagrange
+      #     type: adam
+      #     base_lr: 0.035
+      #     end_lr: 0.035
+      #     warmup_its: 0
+      #     betas: [ 0.9, 0.999 ]
+      #     eps: 1e-5
+      #     weight_decay: 0.0
+      #     clip: 100.0
+      #   cost_limit: 10
+      #   lagrangian_multiplier_init: 0.001
+      #   lagrangian_upper_bound: 10
 
   # Copy from agent_trainer
   explore_agent_trainer:

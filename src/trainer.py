@@ -26,7 +26,9 @@ class TrainerCausalWM:
         seed,
         env_steps,
         init_steps,
+        env_explore_strategy,
         env_epsilon,
+        env_explore_ratio,
         env_temperature,  # Not used
         wm_every,
         cdm_every,
@@ -57,7 +59,9 @@ class TrainerCausalWM:
         self.seed = seed
         self.env_steps = env_steps
         self.init_steps = init_steps
+        self.env_explore_strategy = env_explore_strategy
         self.env_epsilon = env_epsilon
+        self.env_explore_ratio = env_explore_ratio
         self.wm_every = wm_every
         self.cdm_every = cdm_every
         self.pdag_every = pdag_every
@@ -68,6 +72,12 @@ class TrainerCausalWM:
         self.pdag_start = pdag_start
         self.rng = rng
         self.autocast = autocast
+
+        assert (
+            (self.env_epsilon == 0.0 and self.env_explore_ratio > 0.0)
+            or (self.env_epsilon > 0.0 and self.env_explore_ratio == 0.0)
+            or (self.env_epsilon == self.env_explore_ratio == 0.0)
+        ), "cannot have both env_epsilon and env_explore_ratio"
 
         # Initialize the replay buffer
         start_o, _ = env.reset(seed=seed)
@@ -156,22 +166,32 @@ class TrainerCausalWM:
     def train(self):
         """Train the agent and world model for one iteration."""
 
-        wm, agent, replay_buffer = self.wm, self.agent, self.replay_buffer
+        wm, agent, explore_agent, replay_buffer = self.wm, self.agent, self.explore_agent, self.replay_buffer
 
         it = self.it + 1
 
         # Select an action using the agent
         agent.eval()
+        explore_agent.eval()
         wm.eval()
         with self.autocast():
             with torch.no_grad():
                 o = self.replay_buffer.cont_o
                 o = o.to(wm.device)
                 y = wm.encode(o)
-                if self.rng.random() < self.env_epsilon:
-                    a, stacked_a, self.agent_state = agent.act_randomly(self.agent_state, self.cont_mask, self.rng)
+
+                if self.env_explore_strategy == "uniform":
+                    if self.rng.random() < self.env_epsilon:
+                        a, stacked_a, self.agent_state = agent.act_randomly(self.agent_state, self.cont_mask, self.rng)
+                    else:
+                        a, stacked_a, self.agent_state = agent.act(self.agent_state, self.cont_mask, y)
+                elif self.env_explore_strategy == "causal":
+                    if it <= int(self.env_explore_ratio * (self.env_steps - self.init_steps - 1)):
+                        a, stacked_a, self.agent_state = explore_agent.act(self.agent_state, self.cont_mask, y)
+                    else:
+                        a, stacked_a, self.agent_state = agent.act(self.agent_state, self.cont_mask, y)
                 else:
-                    a, stacked_a, self.agent_state = agent.act(self.agent_state, self.cont_mask, y)
+                    raise NotImplementedError()
 
         # Take a step in the environment
         self._env_step(a, stacked_a)
