@@ -1,20 +1,20 @@
 import logging
 import os
 from abc import ABC
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import torch
 import wandb
 
-from replay import ReplayBufferSafeRL
-
+from causallearn.graph.GeneralGraph import GeneralGraph
 from causallearn.graph.Dag import Dag
 from causallearn.graph.GraphNode import GraphNode
 from causallearn.graph.Edge import Edge
+from causallearn.graph.Endpoint import Endpoint
 from causallearn.utils.GraphUtils import GraphUtils
-from causallearn.search.ConstraintBased.FCI import fci
 from causallearn.utils.PCUtils.BackgroundKnowledge import BackgroundKnowledge
+from causallearn.search.ConstraintBased.FCI import fci
 
 
 class CausalDynamicModel(ABC):
@@ -62,7 +62,7 @@ class CausalDynamicModel(ABC):
         bg_knowledge.add_forbidden_by_pattern("cost", "y")
         return bg_knowledge
 
-    def compute(self, buffer: ReplayBufferSafeRL, wm, seed) -> Dict:
+    def compute(self, buffer, wm, seed) -> Dict:
         metrics = {}
         num_samples = 512
         target_device = wm.device
@@ -83,8 +83,8 @@ class CausalDynamicModel(ABC):
             next_y = wm.encoder(next_o)
 
         fci_input, node_names = self.preprocess_data(y, a, next_y, next_r, next_c, 32)
-        new_edges = self._fci_compute(fci_input, node_names)
-        metrics["new_edges"] = new_edges
+        num_edges = self._fci_compute(fci_input, node_names)
+        metrics["num_edges"] = num_edges
 
         return metrics
 
@@ -139,24 +139,36 @@ class CausalDynamicModel(ABC):
         graph, edges = fci(data, depth=2, max_path_length=3, verbose=False, background_knowledge=self.bg_knowledge, node_names=node_names)
 
         ct = 0
-        for item in edges:
-            node1, node2 = item.get_node1(), item.get_node2()
-            # find index
+        ct_nl, ct_dd, ct_pl, ct_pd = 0, 0, 0, 0
+        for e in edges:
+            node1, node2 = e.get_node1(), e.get_node2()
             pdag_node1, pdag_node2 = self._pdag.get_node(node1.name), self._pdag.get_node(node2.name)
-
+            new_edge = Edge(pdag_node1, pdag_node2, end1=e.get_endpoint1(), end2=e.get_endpoint2())
             sanity_case = self.sanity_check(pdag_node1, pdag_node2)
 
             if sanity_case == 0:
-                new_edge = Edge(pdag_node1, pdag_node2, end1=item.get_endpoint1(), end2=item.get_endpoint2())
-                # if "dd" in new_edge.properties:
-                #     continue
+                if len(e.properties) > 0:
+                    for p in e.properties:
+                        if "dd" == p.name:
+                            ct_dd += 1
+                        elif "nl" == p.name:
+                            ct_nl += 1
+                        elif "pl" == p.name:
+                            ct_pl += 1
+                        elif "pd" == p.name:
+                            ct_pd += 1
                 flag = self._pdag.add_edge(new_edge)
+            elif sanity_case == 1:
+                # TODO: common factors. This should be checked again
+                if e.get_numerical_endpoint1() == e.get_numerical_endpoint2() == Endpoint.ARROW:
+                    flag = self._pdag.add_edge(new_edge)
+            if not flag:
                 ct += 1
-                if not flag:
-                    print("Error: Edge already exists")
 
-        logging.info(f"Graph added: {ct} edges.")
-        return ct
+        logging.info(
+            f"Total edges: {len(edges)}.\nEdge not added: {ct}.\n  No latent confounders: {ct_nl}\n  Definitely direct: {ct_dd}\n  Possibly latent confounders: {ct_pl}\n  Possibly direct:{ct_pd}"
+        )
+        return self._pdag.get_num_edges()
 
     def sanity_check(self, node1, node2) -> int:
         node1_type = node1.name.split("_")[0]
@@ -176,11 +188,43 @@ class CausalDynamicModel(ABC):
         else:
             return 0
 
-    def output_graph(self) -> str:
+    def output_graph(self, num_y_nodes=100) -> Optional[str]:
+        def create_subgraph(nodes, graph):
+            subgraph = Dag(nodes)
+            _graph = graph.graph
+
+            for i in reversed(range(graph.num_vars)):
+                if not (graph.nodes[i] in nodes):
+                    _graph = np.delete(_graph, (i), axis=0)
+            for i in reversed(range(graph.num_vars)):
+                if not (graph.nodes[i] in nodes):
+                    _graph = np.delete(_graph, (i), axis=1)
+            subgraph.graph = _graph
+            subgraph.reconstitute_dpath(subgraph.get_graph_edges())
+            return subgraph
+
         if self._pdag is not None:
-            current_logging_dir = wandb.run.dir
-            logging_path = os.path.join(current_logging_dir, "causal_graph")
-            pdy = GraphUtils.to_pydot(self._pdag)
+            logging_path = os.path.join(wandb.run.dir, "causal_graph.jpg")
+
+            next_y_nodes = [node for node in self.nodes if node.name.startswith("nexty")]
+            next_y_node_degrees = [(node, self._pdag.get_degree(node)) for node in next_y_nodes]
+            top_next_y_nodes = sorted(next_y_node_degrees, key=lambda x: x[1], reverse=True)[:num_y_nodes]
+            top_next_y_nodes = [n[0] for n in top_next_y_nodes]
+
+            y_nodes = [self._pdag.get_node(f"y_{node.name.split('_')[1]}") for node in top_next_y_nodes]
+            final_node_set = y_nodes + self.nodes_dict["action"] + top_next_y_nodes + self.nodes_dict["reward"] + self.nodes_dict["cost"]
+
+            filtered_dag = create_subgraph(final_node_set, self._pdag)
+            pdy = GraphUtils.to_pydot(filtered_dag)
+            # TODO: change the style of plotting
+            pdy.set_graph_defaults(
+                layout="dot",  # or 'neato', 'fdp', 'circo' for different layouts
+                rankdir="LR",  # Left-to-right layout
+                ranksep="2.0",  # Increase spacing between ranks
+                nodesep="1.5",  # Increase spacing between nodes
+                concentrate="true",  # Merge multi-edges
+                splines="ortho",  # Orthogonal edge routing
+            )
             pdy.write_png(logging_path)
         else:
             logging_path = None
@@ -188,6 +232,25 @@ class CausalDynamicModel(ABC):
 
     def _get_v_structure(self, node):
         return None
+
+    def get_parents_siblings_set(self, node) -> Tuple[List]:
+        if node.name.startswith("y"):
+            parents, siblings = [], []
+        else:
+            # nexty_{*}, cost, reward
+            parents = self._pdag.get_parents(node)
+            siblings = [self._pdag.get_children(item) for item in parents]
+        return parents, siblings
+
+    def background(self) -> Dict:
+        """"""
+        bg_dict = {}
+        for node in self.nodes_dict["next_y"]:
+            parents, siblings = self.get_parents_siblings_set(node)
+            parents_idx = [int(p.name.split("_")[1]) for p in parents]
+            siblings_idx = [int(s.name.split("_")[1]) for s in siblings]
+            bg_dict[node.name] = dict(parents_idx=parents_idx, siblings_idx=siblings_idx)
+        return bg_dict
 
     @property
     def nodes(self) -> List:

@@ -109,7 +109,7 @@ class TrainerCausalWM:
         )
 
         self.pdag_trainer = PDAGTrainer(cdm, **cdm_trainer, total_its=env_steps, rng=rng, autocast=autocast, compile_=compile_)
-        self.pdag_evaluator = CausalDynamicModel(wm.y_dim, env.action_space.shape[0])
+        self.pdag_graph = CausalDynamicModel(wm.y_dim, env.action_space.shape[0])
 
         self.it = -1
         self.wm_it = 0
@@ -209,8 +209,8 @@ class TrainerCausalWM:
 
         # Train the cdm
         while self.cdm_it <= it:
-            if self.cdm_start <= it:
-                cdm_metrics = self.pdag_trainer.train(start_y, wm, agent, self.explore_agent, it)
+            if (self.cdm_start <= it) and (start_y is not None):
+                cdm_metrics = self.pdag_trainer.train(start_y, wm, self.pdag_graph, agent, self.explore_agent, it)
                 self.cdm_agg.append(cdm_metrics)
             self.cdm_it += self.cdm_every
 
@@ -230,7 +230,7 @@ class TrainerCausalWM:
 
         while self.pdag_it <= it:
             if self.pdag_start <= it:
-                pdag_metrics = self.pdag_evaluator.compute(replay_buffer, wm, self.seed)
+                pdag_metrics = self.pdag_graph.compute(replay_buffer, wm, self.seed)
                 self.pdag_agg.append(pdag_metrics)
             self.pdag_it += self.pdag_every
 
@@ -265,7 +265,7 @@ class TrainerCausalWM:
             agent.eval()
             wm_eval_metrics = self.wm_trainer.evaluate(agent, self.seed)
             agent_eval_metrics = self.agent_trainer.evaluate(is_final, self.seed)
-            pdag_metrics = self.pdag_evaluator.evaluate()  # Visualising pdag
+            pdag_metrics = self.pdag_graph.evaluate()  # Visualising pdag
             metrics.update({f"eval/{k}": v for k, v in wm_eval_metrics.items()})
             metrics.update({f"eval/{k}": v for k, v in agent_eval_metrics.items()})
             metrics.update({f"eval/{k}": v for k, v in pdag_metrics.items()})

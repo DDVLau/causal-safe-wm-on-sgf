@@ -185,11 +185,11 @@ trainer:
   wm_every: 2
   cdm_every: 50 # debugging
   agent_every: 2
-  pdag_every: 500 # debugging
+  pdag_every: 5 # debugging
   log_every: 100
   eval_every: 2500 # debugging
-  cdm_start: 100000
-  pdag_start: 2500 # debugging
+  cdm_start: 0
+  pdag_start: 0 # debugging
 
   wm_trainer:
     batch_size: 1024
